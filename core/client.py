@@ -172,7 +172,7 @@ class StakeClient:
             return False
 
     async def get_balance_simple(self) -> dict:
-        """Get simplified balance."""
+        """Get simplified balance (handles both dict & list formats)."""
         try:
             data = await self._graphql_request("""
                 query UserBalances {
@@ -185,29 +185,103 @@ class StakeClient:
             """)
             user = data.get("user", {})
             balances = user.get("balances", {})
-            available = balances.get("available", [])
+
+            # Stake API kadang return balances sebagai array, kadang sebagai dict
+            if isinstance(balances, list):
+                available_list = []
+                for b in balances:
+                    if isinstance(b, dict):
+                        avail = b.get("available", [])
+                        if isinstance(avail, list):
+                            available_list.extend(avail)
+            else:
+                available_list = balances.get("available", [])
+
+            if not isinstance(available_list, list):
+                available_list = []
+
             result = {}
-            for bal in available:
+            for bal in available_list:
                 currency = bal.get("currency", "btc").lower()
                 result[currency] = float(bal.get("amount", 0))
             return result
         except Exception as e:
             return {"error": str(e)}
 
+    async def get_balance_idr(self) -> str:
+        """Get balance with IDR conversion."""
+        try:
+            bal = await self.get_balance_simple()
+            if "error" in bal:
+                return f"❌ {bal['error']}"
+
+            rates = await self._fetch_crypto_rates()
+            lines = []
+            for currency, amount in bal.items():
+                if amount <= 0:
+                    continue
+                curr_upper = currency.upper()
+                rate = rates.get(currency, 0)
+                if rate > 0:
+                    lines.append(f"  {amount:.8f} {curr_upper}  ≈  Rp {amount * rate:,.0f}")
+                else:
+                    lines.append(f"  {amount:.8f} {curr_upper}")
+
+            if not lines:
+                return "  0 (kosong)"
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Error: {e}"
+
+    async def _fetch_crypto_rates(self) -> dict:
+        """Fetch crypto prices in IDR from CoinGecko."""
+        try:
+            session = await self._get_session()
+            url = (
+                "https://api.coingecko.com/api/v3/simple/price"
+                "?ids=bitcoin,ethereum,tether,binancecoin,litecoin"
+                "&vs_currencies=idr"
+            )
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return {
+                        "btc": data.get("bitcoin", {}).get("idr", 0),
+                        "eth": data.get("ethereum", {}).get("idr", 0),
+                        "usdt": data.get("tether", {}).get("idr", 0),
+                        "usdc": data.get("tether", {}).get("idr", 0),
+                        "bnb": data.get("binancecoin", {}).get("idr", 0),
+                        "ltc": data.get("litecoin", {}).get("idr", 0),
+                    }
+        except:
+            pass
+        return {}
+
+    # ── Coin / Currency helpers ────────────────────────────
+
+    CURRENCIES = ["btc", "eth", "usdt", "usdc", "bnb", "ltc", "doge", "xrp", "trx"]
+
+    @staticmethod
+    def coin_to_stake_currency(coin: str) -> str:
+        """Convert 'btc' → 'BTC' (Stake uses uppercase)."""
+        return coin.upper()
+
     # ── Dice ────────────────────────────────────────────────
 
-    async def place_dice_bet(self, amount: float, target: float, over: bool) -> dict:
+    async def place_dice_bet(self, amount: float, target: float, over: bool,
+                              currency: str = "btc") -> dict:
+        curr = self.coin_to_stake_currency(currency)
         query = """
-        mutation DicePlay($amount: Float!, $target: Float!, $over: Boolean!) {
-            dicePlay(input: { amount: $amount, target: $target, over: $over }) {
-                id amount payout multiplier outcome
+        mutation DicePlay($amount: Float!, $target: Float!, $over: Boolean!, $currency: Currency!) {
+            dicePlay(input: { amount: $amount, target: $target, over: $over, currency: $currency }) {
+                id amount payout multiplier outcome currency
                 user { balance }
             }
         }
         """
         try:
             data = await self._graphql_request(query, {
-                "amount": amount, "target": target, "over": over
+                "amount": amount, "target": target, "over": over, "currency": curr
             })
             r = data.get("dicePlay", {})
             return {
@@ -218,25 +292,28 @@ class StakeClient:
                 "outcome": r.get("outcome", ""),
                 "won": r.get("outcome") == "win",
                 "balance_after": r.get("user", {}).get("balance"),
+                "currency": r.get("currency", currency),
             }
         except Exception as e:
             return {"error": str(e)}
 
     # ── Limbo ───────────────────────────────────────────────
 
-    async def place_limbo_bet(self, amount: float, target_multiplier: float) -> dict:
+    async def place_limbo_bet(self, amount: float, target_multiplier: float,
+                               currency: str = "btc") -> dict:
+        curr = self.coin_to_stake_currency(currency)
         query = """
-        mutation LimboPlay($amount: Float!, $targetMultiplier: Float!) {
-            limboPlay(input: { amount: $amount, targetMultiplier: $targetMultiplier }) {
+        mutation LimboPlay($amount: Float!, $targetMultiplier: Float!, $currency: Currency!) {
+            limboPlay(input: { amount: $amount, targetMultiplier: $targetMultiplier, currency: $currency }) {
                 id amount payout multiplier outcome
-                crashMultiplier targetMultiplier
+                crashMultiplier targetMultiplier currency
                 user { balance }
             }
         }
         """
         try:
             data = await self._graphql_request(query, {
-                "amount": amount, "targetMultiplier": target_multiplier
+                "amount": amount, "targetMultiplier": target_multiplier, "currency": curr
             })
             r = data.get("limboPlay", {})
             return {
@@ -249,6 +326,7 @@ class StakeClient:
                 "balance_after": r.get("user", {}).get("balance"),
                 "crash_point": float(r.get("crashMultiplier", 0)),
                 "target_multiplier": float(r.get("targetMultiplier", 0)),
+                "currency": r.get("currency", currency),
             }
         except Exception as e:
             return {"error": str(e)}

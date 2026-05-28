@@ -135,11 +135,23 @@ async def cmd_balance(args, mirror_info: dict):
             print("   Coba: python main.py auth --mirror auto")
             return
         print(f"✅ Auth OK ({cfg.base_url})")
-        try:
-            bal = await client.get_balance_simple()
-            print(f"\n💰 Balance: {bal}")
-        except Exception as e:
-            print(f"  Error: {e}")
+        print()
+
+        # Simple balance (crypto only)
+        bal = await client.get_balance_simple()
+        if "error" not in bal:
+            print("💰  BALANCE — Crypto")
+            for c, amt in bal.items():
+                if amt > 0:
+                    print(f"     {amt:.8f} {c.upper()}")
+
+            print()
+            # IDR conversion
+            print("🇮🇩  BALANCE — Rupiah")
+            idr_str = await client.get_balance_idr()
+            print(idr_str)
+        else:
+            print(f"  Error: {bal['error']}")
 
 
 async def cmd_manual(args, mirror_info: dict):

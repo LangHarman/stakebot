@@ -1,6 +1,6 @@
 """
-Manual betting mode - user configures bet parameters, bot executes.
-Supports Dice and Limbo games.
+Manual betting mode — user configures bet parameters, bot executes.
+Supports Dice and Limbo games with optional coin/currency selection.
 """
 import sys
 import os
@@ -10,7 +10,43 @@ from core.client import StakeClient, StakeConfig
 from core.engine import BettingEngine, BetConfig, StopConditions
 
 
-def get_manual_config():
+def select_coin() -> str:
+    """Optional coin/currency selection (default: BTC)."""
+    coins = ["btc", "eth", "usdt", "usdc", "bnb", "ltc", "doge", "xrp", "trx"]
+    print("\n  Currency:")
+    for i, c in enumerate(coins, 1):
+        print(f"    {i}. {c.upper()}")
+    print("  (default: BTC, or type a custom symbol)")
+    choice = input("  Choose [1 - BTC]: ").strip()
+    if not choice:
+        return "btc"
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(coins):
+            return coins[idx]
+    except ValueError:
+        pass
+    # Maybe user typed a custom symbol like "sol"
+    return choice.lower().strip()
+
+
+def format_amount(amount: float, currency: str, rates: dict = None) -> str:
+    """Format amount with optional IDR conversion."""
+    if rates is None:
+        rates = {}
+    rate = rates.get(currency.lower(), 0)
+
+    if currency.lower() in ("btc", "eth", "bnb", "ltc"):
+        crypto_part = f"{amount:.8f} {currency.upper()}"
+    else:
+        crypto_part = f"{amount:.4f} {currency.upper()}"
+
+    if rate > 0:
+        return f"{crypto_part} (Rp {amount * rate:,.0f})"
+    return crypto_part
+
+
+def get_manual_config(coin: str = "btc"):
     """Interactive config for manual mode."""
     print("\n" + "=" * 55)
     print("  🎲 STAKE BOT — MANUAL MODE")
@@ -23,10 +59,13 @@ def get_manual_config():
     game = input("  Choose [1]: ").strip() or "1"
     game_type = "limbo" if game == "2" else "dice"
 
+    coin_upper = coin.upper()
+
     # Base bet
     while True:
         try:
-            base = float(input("  Base bet (BTC) [0.000001]: ") or "0.000001")
+            prompt = f"  Base bet ({coin_upper}) [0.000001]: "
+            base = float(input(prompt) or "0.000001")
             if base <= 0:
                 print("  [!] Must be > 0")
                 continue
@@ -58,6 +97,7 @@ def get_manual_config():
             base_bet=base,
             chance=chance,
             bet_high=bet_high,
+            currency=coin,
         )
         param_label = f"{chance}% (target: {cfg.get_target()})"
         dir_label = "High ↑" if bet_high else "Low ↓"
@@ -77,6 +117,7 @@ def get_manual_config():
             game_type="limbo",
             base_bet=base,
             target_multiplier=target_mult,
+            currency=coin,
         )
         param_label = f"{target_mult}x"
         dir_label = "N/A"
@@ -120,19 +161,19 @@ def get_manual_config():
     except ValueError:
         sc.max_bets = 0
     try:
-        sc.target_profit = float(input("  Target profit (BTC) [0]: ") or "0")
+        sc.target_profit = float(input(f"  Target profit ({coin_upper}) [0]: ") or "0")
     except ValueError:
         sc.target_profit = 0
     try:
-        sc.max_loss = float(input("  Max loss (BTC) [0]: ") or "0")
+        sc.max_loss = float(input(f"  Max loss ({coin_upper}) [0]: ") or "0")
     except ValueError:
         sc.max_loss = 0
 
-    return cfg, sc, param_label, dir_label
+    return cfg, sc, param_label, dir_label, coin
 
 
 async def run_manual(cfg):
-    """Run manual betting mode."""
+    """Run manual betting mode with coin selection and IDR balance."""
     # Test auth
     print("\n🔄 Testing authentication...")
     async with StakeClient(cfg) as client:
@@ -143,38 +184,52 @@ async def run_manual(cfg):
             return
         print("✅ Authentication OK!")
 
-        try:
-            bal = await client.get_balance_simple()
-            print(f"💰 Balance: {bal}")
-        except Exception as e:
-            print(f"  Warning: could not fetch balance: {e}")
+        # Show full balance with IDR
+        print("\n💰 BALANCE")
+        idr_str = await client.get_balance_idr()
+        print(idr_str)
 
-    # Get config
-    bet_cfg, stop_cfg, param_label, dir_label = get_manual_config()
+    # Select coin (optional)
+    coin = select_coin()
+    print(f"\n  Using currency: {coin.upper()}")
+
+    # Get bet config
+    bet_cfg, stop_cfg, param_label, dir_label, _ = get_manual_config(coin)
+
+    # Fetch IDR rates for display
+    async with StakeClient(cfg) as client:
+        rates = await client._fetch_crypto_rates()
 
     # Build engine with game-specific place_bet
     async with StakeClient(cfg) as client:
         if bet_cfg.game_type == "limbo":
-            place_bet_fn = lambda amt, target_multiplier=None, **kw: client.place_limbo_bet(
-                amount=amt, target_multiplier=target_multiplier
-            )
+            async def place_fn(amt, target_multiplier=None, **kw):
+                return await client.place_limbo_bet(
+                    amount=amt, target_multiplier=target_multiplier, currency=coin
+                )
         else:
-            place_bet_fn = lambda amt, target=None, over=None, **kw: client.place_dice_bet(
-                amount=amt, target=target, over=over
-            )
+            async def place_fn(amt, target=None, over=None, **kw):
+                return await client.place_dice_bet(
+                    amount=amt, target=target, over=over, currency=coin
+                )
 
         engine = BettingEngine(
-            place_bet_fn=place_bet_fn,
+            place_bet_fn=place_fn,
             get_balance_fn=lambda: client.get_balance_simple(),
         )
         engine.config = bet_cfg
         engine.stop_conditions = stop_cfg
 
+        base_str = format_amount(bet_cfg.base_bet, coin, rates)
+        target_str = format_amount(stop_cfg.target_profit, coin, rates) if stop_cfg.target_profit else "∞"
+        loss_str = format_amount(stop_cfg.max_loss, coin, rates) if stop_cfg.max_loss else "∞"
+
         print("\n" + "─" * 55)
         print("  📋 CONFIG SUMMARY")
         print("─" * 55)
         print(f"  Game:     {'🚀 Limbo' if bet_cfg.game_type == 'limbo' else '🎲 Dice'}")
-        print(f"  Base bet: {bet_cfg.base_bet} BTC")
+        print(f"  Currency: {coin.upper()}")
+        print(f"  Base bet: {base_str}")
         print(f"  Params:   {param_label}")
         print(f"  Payout:   {bet_cfg.get_payout()}x")
         if bet_cfg.game_type == "dice":
@@ -182,8 +237,8 @@ async def run_manual(cfg):
         print(f"  On Win:   {bet_cfg.on_win} ({bet_cfg.increase_pct}%)")
         print(f"  On Loss:  {bet_cfg.on_loss} ({bet_cfg.increase_pct}%)")
         print(f"  Max bets: {stop_cfg.max_bets or '∞'}")
-        print(f"  Target:   {stop_cfg.target_profit or '∞'} BTC")
-        print(f"  Max loss: {stop_cfg.max_loss or '∞'} BTC")
+        print(f"  Target:   {target_str}")
+        print(f"  Max loss: {loss_str}")
         print("─" * 55)
         input("\n  Press Enter to start betting (Ctrl+C to stop)...\n")
 
