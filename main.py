@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from core.client import (
     StakeClient, StakeConfig, StakeConfigManager,
     get_token_from_browser_instructions, test_auth,
+    test_auth_from_config,
 )
 
 
@@ -72,14 +73,22 @@ async def cmd_auth(args):
     print(get_token_from_browser_instructions())
     token = input("\n  Paste token here to test (or Enter to skip): ").strip()
     if token:
-        ok = await test_auth(token)
+        # Build config — use mirror URL if flag is set
+        cfg = StakeConfig(access_token=token)
+        if USE_MIRROR:
+            cfg.base_url = "https://stake.mba"
+
+        ok = await test_auth_from_config(cfg)
         if ok:
             print("✅ Token valid! Saving...")
-            cfg = StakeConfig(access_token=token)
             StakeConfigManager.save(cfg)
+            print(f"   Domain: {cfg.base_url}")
         else:
-            print("❌ Token invalid. Double-check the steps above.")
-            print("   Make sure you're logged into Stake.com in your browser.")
+            print("❌ Token check failed. Coba lagi pake --mirror kalo token dari mirror:")
+            print("   python main.py auth --mirror auto")
+            # Still save it, user can test later
+            StakeConfigManager.save(cfg)
+            print("   Token tetap disimpan, coba: python main.py balance")
 
 
 async def cmd_balance(args):

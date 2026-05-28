@@ -242,9 +242,13 @@ class StakeClient:
 
 
 async def test_auth(token: str) -> bool:
-    """Quick test if an access token works."""
+    """Quick test if an access token works (default domain)."""
+    cfg = StakeConfig(access_token=token)
+    return await test_auth_from_config(cfg)
+
+async def test_auth_from_config(cfg: StakeConfig) -> bool:
+    """Test auth with a specific config (supports mirror domain)."""
     try:
-        cfg = StakeConfig(access_token=token)
         async with StakeClient(cfg) as client:
             return await client.check_auth()
     except Exception:
