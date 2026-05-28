@@ -96,32 +96,49 @@ class StakeClient:
             payload["operationName"] = operation_name
 
         async with session.post(url, json=payload, headers=self._headers,
-                                timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                                timeout=aiohttp.ClientTimeout(total=20)) as resp:
             if resp.status == 401:
-                raise PermissionError("Auth failed")
+                raise PermissionError("Auth failed — token invalid")
             if resp.status >= 400:
-                text = await resp.text()
-                raise Exception(f"HTTP {resp.status}")
+                text = (await resp.text())[:300]
+                raise Exception(f"HTTP {resp.status}: {text[:100]}")
             data = await resp.json()
             if "errors" in data:
                 errors = [e.get("message", "?") for e in data["errors"]]
                 raise Exception(f"GraphQL error: {errors[0]}")
+            # Save working URL for subsequent requests
+            self._actual_url = url.replace("/_api/graphql", "").rstrip("/")
             return data.get("data", {})
 
     async def _graphql_request(self, query: str, variables: dict = None,
                                operation_name: str = None) -> dict:
-        """Send GraphQL request with mirror fallback."""
-        from urllib.parse import urljoin
+        """Send GraphQL request with mirror fallback.
+        Once one mirror works, reuse it for all subsequent requests.
+        """
         last_err = None
         tried_urls = []
 
+        # If we already know a working URL, try it first
+        working_base = self._actual_url.rstrip("/")
+        if working_base:
+            working_url = working_base + "/_api/graphql"
+            try:
+                return await self._try_graphql(working_url, query, variables, operation_name)
+            except PermissionError:
+                raise
+            except Exception as e:
+                last_err = e
+                tried_urls.append(working_url)
+                # Working URL failed, fall through to try all mirrors
+
         for mirror_url in self._resolve_mirror_list():
             url = mirror_url.rstrip("/") + "/_api/graphql"
+            if url in tried_urls:
+                continue
             tried_urls.append(url)
             try:
                 return await self._try_graphql(url, query, variables, operation_name)
             except PermissionError:
-                # Auth failed - no point trying other mirrors
                 raise
             except Exception as e:
                 last_err = e

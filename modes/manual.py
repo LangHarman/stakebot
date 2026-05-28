@@ -176,9 +176,12 @@ def get_manual_config(coin: str = "btc"):
 
 async def run_manual(cfg):
     """Run manual betting mode with coin selection and IDR balance."""
-    # Test auth
-    print("\n🔄 Testing authentication...")
+    import asyncio
+
+    # Use ONE single session for everything
     async with StakeClient(cfg) as client:
+        # Test auth
+        print("\n🔄 Testing authentication...")
         ok = await client.check_auth()
         if not ok:
             print("❌ Authentication failed! Check your access token.")
@@ -190,20 +193,32 @@ async def run_manual(cfg):
         print("\n💰 BALANCE")
         idr_str = await client.get_balance_idr()
         print(idr_str)
+        if "error" in idr_str:
+            print("  (IDR conversion unavailable)")
 
-    # Select coin (optional)
-    coin = select_coin()
-    print(f"\n  Using currency: {coin.upper()}")
+        # Small delay to avoid rate limits
+        await asyncio.sleep(0.5)
 
-    # Get bet config
-    bet_cfg, stop_cfg, param_label, dir_label, _ = get_manual_config(coin)
+        # Select coin (optional)
+        coin = select_coin()
+        print(f"\n  Using currency: {coin.upper()}")
 
-    # Fetch IDR rates for display
-    async with StakeClient(cfg) as client:
+        # Get bet config
+        bet_cfg, stop_cfg, param_label, dir_label, _ = get_manual_config(coin)
+
+        # Fetch IDR rates
         rates = await client._fetch_crypto_rates()
 
-    # Build engine with game-specific place_bet
-    async with StakeClient(cfg) as client:
+        # Get selected coin's balance
+        try:
+            full_bal = await client.get_balance_simple()
+            coin_bal = float(full_bal.get(coin, 0))
+            bal_str = format_amount(coin_bal, coin, rates)
+            print(f"\n  {coin.upper()} balance: {bal_str}")
+        except Exception:
+            pass
+
+        # Build place_bet function
         if bet_cfg.game_type == "limbo":
             async def place_fn(amount, target_multiplier=None, **kw):
                 return await client.place_limbo_bet(
@@ -217,7 +232,7 @@ async def run_manual(cfg):
 
         engine = BettingEngine(
             place_bet_fn=place_fn,
-            get_balance_fn=lambda: client.get_balance_simple(),
+            get_balance_fn=lambda c=coin: client.get_balance_simple(),
         )
         engine.config = bet_cfg
         engine.stop_conditions = stop_cfg
@@ -231,6 +246,7 @@ async def run_manual(cfg):
         print("─" * 55)
         print(f"  Game:     {'🚀 Limbo' if bet_cfg.game_type == 'limbo' else '🎲 Dice'}")
         print(f"  Currency: {coin.upper()}")
+        print(f"  Balance:  {bal_str}")
         print(f"  Base bet: {base_str}")
         print(f"  Params:   {param_label}")
         print(f"  Payout:   {bet_cfg.get_payout()}x")
