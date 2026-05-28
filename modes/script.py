@@ -286,7 +286,7 @@ def get_script_path(name: str) -> str:
     return name
 
 
-async def run_script(token: str, script_path: str, max_bets: int = 0, mirror: bool = False):
+async def run_script(cfg, script_path: str, max_bets: int = 0):
     """Run LUA script betting mode."""
     if not HAS_LUA:
         print("❌ lupa library required. Install: pip install lupa")
@@ -302,11 +302,7 @@ async def run_script(token: str, script_path: str, max_bets: int = 0, mirror: bo
     print("   Lines:", len(script_code.splitlines()))
     print("─" * 50)
 
-    config = StakeConfig(access_token=token)
-    if mirror:
-        config.mirror_mode = True
-
-    async with StakeClient(config) as client:
+    async with StakeClient(cfg) as client:
         print("🔄 Testing authentication...")
         ok = await client.check_auth()
         if not ok:

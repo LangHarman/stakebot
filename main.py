@@ -5,15 +5,15 @@
 Fitur:
   • Manual mode — atur base bet, chance, on-win/on-loss strategy
   • LUA Script mode — compatible dengan Seuntjie DiceBot programmer mode
-  • Mirror support — playstake.club dan mirror lainnya
+  • Mirror support — auto fallback ke stake.mba, playstake.club, dll
   • Cross-platform — jalan di Termux (Android), VPS Linux, STB Armbian
 
 Usage:
-  python main.py auth            - Panduan dapetin access token
-  python main.py manual          - Manual betting mode (interaktif)
-  python main.py script [file]   - LUA script mode
-  python main.py scripts         - Lihat daftar script contoh
-  python main.py balance         - Cek balance akun
+  python main.py auth                    # Setup token
+  python main.py auth --mirror stake.mba # Setup token dari mirror
+  python main.py manual                  # Manual mode
+  python main.py balance                 # Cek balance
+  python main.py script martingale       # LUA script mode
 """
 import sys
 import os
@@ -21,260 +21,251 @@ import asyncio
 import argparse
 from pathlib import Path
 
-# Make sure we can find core/
 sys.path.insert(0, os.path.dirname(__file__))
 
 from core.client import (
     StakeClient, StakeConfig, StakeConfigManager,
+    KNOWN_MIRRORS,
     get_token_from_browser_instructions, test_auth,
     test_auth_from_config,
 )
 
 
-# ── Global flag: use mirror ──
-USE_MIRROR = False
+# ── Mirror resolver ────────────────────────────────────
 
+def resolve_mirror(mirror_arg: str) -> dict:
+    """
+    Parse --mirror flag. Returns {mirror_mode, base_url}.
+    
+    --mirror auto      → mirror_mode=True, base_url from config or first mirror
+    --mirror stake.mba → mirror_mode=True, base_url=https://stake.mba
+    --mirror none      → mirror_mode=False, base_url=stake.com
+    --mirror            → same as auto
+    """
+    arg = (mirror_arg or "auto").strip().lower()
 
-def set_mirror_flag(mirror_str: str):
-    """Parse mirror flag from command line."""
-    global USE_MIRROR
-    parts = mirror_str.split(",") if mirror_str else []
-    if "auto" in parts or not parts:
-        USE_MIRROR = True
-        return "https://playstake.club"
-    return "https://stake.com"
+    if arg == "none":
+        return {"mirror_mode": False, "base_url": "https://stake.com"}
+
+    if arg == "auto" or not arg:
+        # Try to load saved config, use its base_url
+        cfg = StakeConfigManager.load()
+        return {
+            "mirror_mode": True,
+            "base_url": cfg.base_url or "https://stake.com",
+        }
+
+    # User specified a domain: "stake.mba", "playstake.club", etc.
+    if not arg.startswith("http"):
+        arg = "https://" + arg
+    return {
+        "mirror_mode": True,
+        "base_url": arg.rstrip("/"),
+    }
 
 
 def get_token(args) -> str:
     """Get token from args, config file, or prompt."""
     if args.token:
         return args.token
-
-    # Try config file
     cfg = StakeConfigManager.load()
     if cfg.access_token:
         return cfg.access_token
 
-    # Prompt
     print("\n🔑 Enter your Stake.com access token:")
     token = input("  Token: ").strip()
     if token:
-        # Save it
         cfg.access_token = token
         StakeConfigManager.save(cfg)
         print("✅ Token saved to ~/.stakebot/config.json")
     return token
 
 
+def build_config(token: str, mirror_info: dict) -> StakeConfig:
+    """Build StakeConfig from token + mirror info."""
+    cfg = StakeConfigManager.load()
+    cfg.access_token = token or cfg.access_token
+    cfg.mirror_mode = mirror_info.get("mirror_mode", False)
+    cfg.base_url = mirror_info.get("base_url", cfg.base_url)
+    return cfg
+
+
 # ── Commands ───────────────────────────────────────────
 
-async def cmd_auth(args):
-    """Show instructions for getting access token."""
+async def cmd_auth(args, mirror_info: dict):
     print(get_token_from_browser_instructions())
-    token = input("\n  Paste token here to test (or Enter to skip): ").strip()
-    if token:
-        # Build config — use mirror URL if flag is set
-        cfg = StakeConfig(access_token=token)
-        if USE_MIRROR:
-            cfg.base_url = "https://stake.mba"
+    token = input("\n  Paste token to test (or Enter to skip): ").strip()
+    if not token:
+        return
 
-        ok = await test_auth_from_config(cfg)
-        if ok:
-            print("✅ Token valid! Saving...")
-            StakeConfigManager.save(cfg)
-            print(f"   Domain: {cfg.base_url}")
-        else:
-            print("❌ Token check failed. Coba lagi pake --mirror kalo token dari mirror:")
+    cfg = build_config(token, mirror_info)
+
+    print(f"  Testing with domain: {cfg.base_url}")
+    if cfg.mirror_mode:
+        print(f"  Mirror fallback enabled (auto fallback to mirrors)")
+
+    ok = await test_auth_from_config(cfg)
+    if ok:
+        print(f"\n✅ Token valid! Domain: {cfg.base_url}")
+        StakeConfigManager.save(cfg)
+    else:
+        print(f"\n❌ Auth failed on {cfg.base_url}")
+        if not cfg.mirror_mode:
+            print("   Coba lagi pake --mirror auto kalo pake mirror domain:")
             print("   python main.py auth --mirror auto")
-            # Still save it, user can test later
-            StakeConfigManager.save(cfg)
-            print("   Token tetap disimpan, coba: python main.py balance")
+        else:
+            print("   Token mungkin expired. Ulangi dari Kiwi Browser.")
+        # Still save so user can retry later
+        StakeConfigManager.save(cfg)
+        print("   Token tetap disimpan. Coba: python main.py balance")
 
 
-async def cmd_balance(args):
-    """Check account balance."""
+async def cmd_balance(args, mirror_info: dict):
     token = get_token(args)
     if not token:
         print("❌ No token. Run: python main.py auth")
         return
 
-    cfg = StakeConfig(access_token=token)
-    if USE_MIRROR:
-        cfg.mirror_mode = True
-
+    cfg = build_config(token, mirror_info)
     async with StakeClient(cfg) as client:
         ok = await client.check_auth()
         if not ok:
-            print("❌ Auth failed! Token invalid/expired.")
+            print("❌ Auth failed! Token invalid/expired atau domain salah.")
+            print(f"   Domain: {cfg.base_url}")
+            print("   Coba: python main.py auth --mirror auto")
             return
-        print("✅ Auth OK")
+        print(f"✅ Auth OK ({cfg.base_url})")
         try:
             bal = await client.get_balance_simple()
             print(f"\n💰 Balance: {bal}")
         except Exception as e:
-            print(f"  Error fetching balance: {e}")
+            print(f"  Error: {e}")
 
 
-async def cmd_manual(args):
-    """Run manual betting mode."""
+async def cmd_manual(args, mirror_info: dict):
     from modes.manual import run_manual
-
     token = get_token(args)
     if not token:
         print("❌ No token. Run: python main.py auth")
         return
+    cfg = build_config(token, mirror_info)
+    await run_manual(cfg)
 
-    await run_manual(token, mirror=USE_MIRROR)
 
-
-async def cmd_script(args):
-    """Run LUA script betting mode."""
+async def cmd_script(args, mirror_info: dict):
     from modes.script import run_script, get_script_path
-
     token = get_token(args)
     if not token:
         print("❌ No token. Run: python main.py auth")
         return
-
+    cfg = build_config(token, mirror_info)
     script = args.script or "custom"
     max_bets = args.max_bets or 0
-    await run_script(token, script, max_bets=max_bets, mirror=USE_MIRROR)
+    await run_script(cfg, script, max_bets=max_bets)
 
 
 def cmd_scripts(args):
-    """List available example scripts."""
     from modes.script import EXAMPLE_SCRIPTS
-
     base = os.path.dirname(__file__)
     scripts_dir = os.path.join(base, "scripts")
-    
+
     print("\n📜  AVAILABLE SCRIPTS")
     print("=" * 50)
     print()
-    
-    # Built-in example scripts
-    print("Built-in templates (can be used directly):")
+
+    print("Built-in templates:")
     for name in EXAMPLE_SCRIPTS:
         desc = {
             "martingale": "Double on loss, reset on win (Dice)",
             "reverse_martingale": "Double on win, reset on loss (Dice)",
             "dalembert": "+1 unit on loss, -1 unit on win (Dice)",
-            "oscars_grind": "Grind for small profits (Dice)",
-            "limbo": "Target multiplier strategy (Limbo)",
-            "custom": "Empty template — write your own!",
+            "oscars_grind": "Grind for profits (Dice)",
+            "limbo": "Multiplier target (Limbo)",
+            "custom": "Empty template",
         }.get(name, "")
         print(f"  {name:20s} — {desc}")
 
-    # Files in scripts/ directory
     if os.path.isdir(scripts_dir):
         files = sorted(f for f in os.listdir(scripts_dir) if f.endswith(".lua"))
         if files:
-            print(f"\n  Scripts in {scripts_dir}/:")
+            print(f"\n  Script files ({scripts_dir}/):")
             for f in files:
                 fpath = os.path.join(scripts_dir, f)
-                size = os.path.getsize(fpath)
-                print(f"    {f:30s} ({size} bytes)")
+                print(f"    {f:30s} ({os.path.getsize(fpath)} bytes)")
 
     print()
     print("Usage:")
     print("  python main.py script martingale")
     print("  python main.py script oscars_grind --max-bets 100")
-    print("  python main.py script /path/to/your/strategy.lua")
 
 
 async def cmd_gen_script(args):
-    """Generate an example script file."""
     from modes.script import EXAMPLE_SCRIPTS
-
     name = args.name or "custom"
     out_path = args.output or f"scripts/{name}.lua"
-
     if name not in EXAMPLE_SCRIPTS:
-        print(f"❌ Unknown template: {name}")
-        print(f"   Available: {', '.join(EXAMPLE_SCRIPTS.keys())}")
+        print(f"❌ Unknown: {name}")
         return
-
-    content = EXAMPLE_SCRIPTS[name]
-
-    dir_path = os.path.dirname(out_path)
-    if dir_path:
-        os.makedirs(dir_path, exist_ok=True)
-
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w") as f:
-        f.write(content)
-
-    print(f"✅ Generated {os.path.basename(out_path)} at {out_path}")
-    print()
-    print("Edit the file, then run:")
-    print(f"  python main.py script {out_path}")
+        f.write(EXAMPLE_SCRIPTS[name])
+    print(f"✅ Generated {os.path.basename(out_path)}")
+    print(f"   python main.py script {out_path}")
 
 
 # ── Main ───────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="🎲 StakeBot — Automated CLI betting bot for Stake.com",
+        description="🎲 StakeBot — CLI betting bot untuk Stake.com",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py auth                 # Setup token
-  python main.py manual               # Manual mode
-  python main.py script martingale    # LUA script mode
-  python main.py script oscars_grind --max-bets 50
-  python main.py script myscript.lua  # Custom script
-  python main.py gen-script custom -o myscript.lua
-  python main.py balance --mirror auto
+  python main.py auth                      # Setup token
+  python main.py auth --mirror stake.mba   # Token dari mirror
+  python main.py balance                   # Cek balance
+  python main.py balance --mirror auto     # Cek balance via mirror
+  python main.py manual                    # Manual mode
+  python main.py script martingale         # LUA script mode
+  python main.py script limbo_martingale   # Limbo LUA script
         """
     )
-    parser.add_argument("--token", "-t", help="Access token (or save via 'auth')")
-    parser.add_argument("--mirror", "-m", default="",
-                        help='Mirror mode: "auto" or URL (default: auto)')
+    parser.add_argument("--token", "-t", help="Access token")
+    parser.add_argument("--mirror", "-m", default="auto",
+                        help='Mirror: "auto", "stake.mba", "playstake.club", "none"')
 
-    sub = parser.add_subparsers(dest="command", help="Available commands")
+    sub = parser.add_subparsers(dest="command")
 
-    # auth
-    sub.add_parser("auth", help="Get/setup access token")
+    sub.add_parser("auth", help="Setup access token")
+    sub.add_parser("balance", help="Check balance")
+    sub.add_parser("manual", help="Manual betting mode")
 
-    # balance
-    sub.add_parser("balance", help="Check account balance")
-
-    # manual
-    sub.add_parser("manual", help="Manual betting mode (interactive config)")
-
-    # script
-    sp = sub.add_parser("script", help="Run LUA script mode")
+    sp = sub.add_parser("script", help="LUA script mode")
     sp.add_argument("script", nargs="?", default="custom",
                     help="Script name or path (default: custom)")
     sp.add_argument("--max-bets", type=int, default=0,
                     help="Stop after N bets (0 = unlimited)")
 
-    # scripts
     sub.add_parser("scripts", help="List available scripts")
 
-    # gen-script
-    gs = sub.add_parser("gen-script", help="Generate example script file")
-    gs.add_argument("name", nargs="?", default="custom",
-                    choices=["martingale", "reverse_martingale", "dalembert",
-                             "oscars_grind", "custom"],
-                    help="Template name (default: custom)")
-    gs.add_argument("--output", "-o", default="",
-                    help="Output file path")
+    gs = sub.add_parser("gen-script", help="Generate example script")
+    gs.add_argument("name", nargs="?", default="custom")
+    gs.add_argument("--output", "-o", default="")
 
     args = parser.parse_args()
 
-    # Mirror setup
-    global USE_MIRROR
-    mirror = args.mirror or os.environ.get("STAKE_MIRROR", "auto")
-    if mirror and mirror != "none":
-        USE_MIRROR = True
-        print(f"🪞 Mirror mode: {mirror if mirror != 'auto' else 'auto'}")
-        print()
+    # Resolve mirror
+    mirror_info = resolve_mirror(args.mirror)
+    if mirror_info["mirror_mode"]:
+        print(f"🪞 Mirror: {mirror_info['base_url']}")
+    print()
 
     if not args.command:
         parser.print_help()
         return
 
-    commands = {
+    # Dispatch
+    cmds = {
         "auth": cmd_auth,
         "balance": cmd_balance,
         "manual": cmd_manual,
@@ -283,14 +274,13 @@ Examples:
         "gen-script": cmd_gen_script,
     }
 
-    cmd = commands.get(args.command)
+    cmd = cmds.get(args.command)
     if not cmd:
         parser.print_help()
         return
 
-    # Sync or async
     if asyncio.iscoroutinefunction(cmd):
-        asyncio.run(cmd(args))
+        asyncio.run(cmd(args, mirror_info))
     else:
         cmd(args)
 

@@ -11,6 +11,18 @@ from dataclasses import dataclass
 import aiohttp
 
 
+# Known working Stake.com mirrors
+KNOWN_MIRRORS = [
+    "https://stake.com",
+    "https://stake.mba",
+    "https://playstake.club",
+    "https://stake.bz",
+    "https://stake.us",
+    "https://stake.to",
+    "https://stake.ai",
+]
+
+
 @dataclass
 class StakeConfig:
     """Bot configuration."""
@@ -41,24 +53,83 @@ class StakeConfigManager:
             "session_cookie": cfg.session_cookie,
             "base_url": cfg.base_url,
             "mirror_mode": cfg.mirror_mode,
-        }, indent=2))
+        }, indent=2, ensure_ascii=False))
         path.chmod(0o600)
 
 
 class StakeClient:
     """
     Stake.com API client — pure aiohttp.
-    No stakeapi/cryptography dependency needed.
+    Auto fallback ke mirror kalo domain utama gagal.
     """
 
     def __init__(self, config: Optional[StakeConfig] = None):
         self.config = config or StakeConfig()
         self._session: Optional[aiohttp.ClientSession] = None
         self._headers = {}
+        self._actual_url = self.config.base_url.rstrip("/")
 
     @property
     def base_url(self) -> str:
-        return self.config.base_url.rstrip("/")
+        return self._actual_url
+
+    def _resolve_mirror_list(self) -> list:
+        """Return list of URLs to try, starting from config base_url."""
+        cfg_url = self.config.base_url.rstrip("/")
+        if self.config.mirror_mode:
+            # Start with configured URL, then try other mirrors
+            urls = [cfg_url]
+            for m in KNOWN_MIRRORS:
+                if m not in urls:
+                    urls.append(m)
+            return urls
+        return [cfg_url]
+
+    async def _try_graphql(self, url: str, query: str, variables: dict = None,
+                           operation_name: str = None) -> dict:
+        """Try a GraphQL request to a specific URL."""
+        session = await self._get_session()
+        payload = {"query": query}
+        if variables:
+            payload["variables"] = variables
+        if operation_name:
+            payload["operationName"] = operation_name
+
+        async with session.post(url, json=payload, headers=self._headers,
+                                timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            if resp.status == 401:
+                raise PermissionError("Auth failed")
+            if resp.status >= 400:
+                text = await resp.text()
+                raise Exception(f"HTTP {resp.status}")
+            data = await resp.json()
+            if "errors" in data:
+                errors = [e.get("message", "?") for e in data["errors"]]
+                raise Exception(f"GraphQL error: {errors[0]}")
+            return data.get("data", {})
+
+    async def _graphql_request(self, query: str, variables: dict = None,
+                               operation_name: str = None) -> dict:
+        """Send GraphQL request with mirror fallback."""
+        from urllib.parse import urljoin
+        last_err = None
+        tried_urls = []
+
+        for mirror_url in self._resolve_mirror_list():
+            url = mirror_url.rstrip("/") + "/_api/graphql"
+            tried_urls.append(url)
+            try:
+                return await self._try_graphql(url, query, variables, operation_name)
+            except PermissionError:
+                # Auth failed — no point trying other mirrors
+                raise
+            except Exception as e:
+                last_err = e
+                continue
+
+        raise Exception(
+            f"All mirrors failed ({len(tried_urls)} tried). Last: {last_err}"
+        )
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -66,7 +137,6 @@ class StakeClient:
             self._headers = {
                 "x-access-token": self.config.access_token,
                 "Content-Type": "application/json",
-                "Origin": self.base_url,
                 "User-Agent": (
                     "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -89,54 +159,14 @@ class StakeClient:
     async def __aexit__(self, *args):
         await self.close()
 
-    # ── GraphQL ─────────────────────────────────────────────
-
-    async def _graphql_request(
-        self,
-        query: str,
-        variables: dict = None,
-        operation_name: str = None,
-    ) -> dict:
-        """Send a raw GraphQL request to Stake.com."""
-        session = await self._get_session()
-        url = f"{self.base_url}/_api/graphql"
-
-        payload = {"query": query}
-        if variables:
-            payload["variables"] = variables
-        if operation_name:
-            payload["operationName"] = operation_name
-
-        async with session.post(url, json=payload, headers=self._headers) as resp:
-            if resp.status == 401:
-                raise Exception("❌ Auth failed — token invalid/expired")
-            if resp.status == 429:
-                raise Exception("⏳ Rate limited — slow down")
-            if resp.status >= 400:
-                text = await resp.text()
-                raise Exception(f"HTTP {resp.status}: {text[:200]}")
-
-            data = await resp.json()
-
-            if "errors" in data:
-                errors = [e.get("message", "?") for e in data["errors"]]
-                raise Exception(f"GraphQL errors: {', '.join(errors)}")
-
-            return data.get("data", {})
-
     # ── Auth / Balance ──────────────────────────────────────
 
     async def check_auth(self) -> bool:
-        """Test if access token works."""
+        """Test if access token works (tries mirrors if enabled)."""
         try:
             data = await self._graphql_request("""
-                query {
-                    user {
-                        id
-                        name
-                    }
-                }
-            """, operation_name="User")
+                query { user { id name } }
+            """)
             return data.get("user") is not None
         except Exception:
             return False
@@ -148,37 +178,25 @@ class StakeClient:
                 query UserBalances {
                     user {
                         balances {
-                            available {
-                                amount
-                                currency
-                            }
+                            available { amount currency }
                         }
                     }
                 }
-            """, operation_name="UserBalances")
-
+            """)
             user = data.get("user", {})
             balances = user.get("balances", {})
             available = balances.get("available", [])
-
             result = {}
             for bal in available:
                 currency = bal.get("currency", "btc").lower()
-                amount = float(bal.get("amount", 0))
-                result[currency] = amount
+                result[currency] = float(bal.get("amount", 0))
             return result
         except Exception as e:
             return {"error": str(e)}
 
     # ── Dice ────────────────────────────────────────────────
 
-    async def place_dice_bet(
-        self,
-        amount: float,
-        target: float,
-        over: bool,
-    ) -> dict:
-        """Place a Dice bet via GraphQL."""
+    async def place_dice_bet(self, amount: float, target: float, over: bool) -> dict:
         query = """
         mutation DicePlay($amount: Float!, $target: Float!, $over: Boolean!) {
             dicePlay(input: { amount: $amount, target: $target, over: $over }) {
@@ -187,31 +205,26 @@ class StakeClient:
             }
         }
         """
-        variables = {"amount": amount, "target": target, "over": over}
-
         try:
-            data = await self._graphql_request(query, variables, "DicePlay")
-            result = data.get("dicePlay", {})
+            data = await self._graphql_request(query, {
+                "amount": amount, "target": target, "over": over
+            })
+            r = data.get("dicePlay", {})
             return {
-                "id": result.get("id", ""),
-                "amount": float(result.get("amount", 0)),
-                "payout": float(result.get("payout", 0)),
-                "multiplier": float(result.get("multiplier", 0)),
-                "outcome": result.get("outcome", ""),
-                "won": result.get("outcome") == "win",
-                "balance_after": result.get("user", {}).get("balance"),
+                "id": r.get("id", ""),
+                "amount": float(r.get("amount", 0)),
+                "payout": float(r.get("payout", 0)),
+                "multiplier": float(r.get("multiplier", 0)),
+                "outcome": r.get("outcome", ""),
+                "won": r.get("outcome") == "win",
+                "balance_after": r.get("user", {}).get("balance"),
             }
         except Exception as e:
             return {"error": str(e)}
 
     # ── Limbo ───────────────────────────────────────────────
 
-    async def place_limbo_bet(
-        self,
-        amount: float,
-        target_multiplier: float,
-    ) -> dict:
-        """Place a Limbo bet via GraphQL."""
+    async def place_limbo_bet(self, amount: float, target_multiplier: float) -> dict:
         query = """
         mutation LimboPlay($amount: Float!, $targetMultiplier: Float!) {
             limboPlay(input: { amount: $amount, targetMultiplier: $targetMultiplier }) {
@@ -221,33 +234,33 @@ class StakeClient:
             }
         }
         """
-        variables = {"amount": amount, "targetMultiplier": target_multiplier}
-
         try:
-            data = await self._graphql_request(query, variables, "LimboPlay")
-            result = data.get("limboPlay", {})
+            data = await self._graphql_request(query, {
+                "amount": amount, "targetMultiplier": target_multiplier
+            })
+            r = data.get("limboPlay", {})
             return {
-                "id": result.get("id", ""),
-                "amount": float(result.get("amount", 0)),
-                "payout": float(result.get("payout", 0)),
-                "multiplier": float(result.get("multiplier", 0)),
-                "outcome": result.get("outcome", ""),
-                "won": result.get("outcome") == "win",
-                "balance_after": result.get("user", {}).get("balance"),
-                "crash_point": float(result.get("crashMultiplier", 0)),
-                "target_multiplier": float(result.get("targetMultiplier", 0)),
+                "id": r.get("id", ""),
+                "amount": float(r.get("amount", 0)),
+                "payout": float(r.get("payout", 0)),
+                "multiplier": float(r.get("multiplier", 0)),
+                "outcome": r.get("outcome", ""),
+                "won": r.get("outcome") == "win",
+                "balance_after": r.get("user", {}).get("balance"),
+                "crash_point": float(r.get("crashMultiplier", 0)),
+                "target_multiplier": float(r.get("targetMultiplier", 0)),
             }
         except Exception as e:
             return {"error": str(e)}
 
 
 async def test_auth(token: str) -> bool:
-    """Quick test if an access token works (default domain)."""
-    cfg = StakeConfig(access_token=token)
-    return await test_auth_from_config(cfg)
+    """Quick test (default domain)."""
+    return await test_auth_from_config(StakeConfig(access_token=token))
+
 
 async def test_auth_from_config(cfg: StakeConfig) -> bool:
-    """Test auth with a specific config (supports mirror domain)."""
+    """Test auth with custom config (supports mirror fallback)."""
     try:
         async with StakeClient(cfg) as client:
             return await client.check_auth()
@@ -261,12 +274,12 @@ def get_token_from_browser_instructions() -> str:
 ║              CARA DAPATIN ACCESS TOKEN                   ║
 ╠══════════════════════════════════════════════════════════╣
 ║                                                          ║
-║  1. Buka Stake.com (atau mirror) di Chrome/Firefox       ║
+║  1. Buka Stake.com (atau mirror) di Kiwi Browser         ║
 ║  2. Login ke akun kamu                                   ║
-║  3. F12 → tab Network                                    ║
-║  4. Refresh halaman                                      ║
-║  5. Cari request ke "/_api/graphql"                      ║
-║  6. Header "x-access-token" → copy token-nya             ║
+║  3. Tap 3 titik → Developer Tools                        ║
+║  4. Tab Network → filter: graphql                        ║
+║  5. Klik salah satu request /_api/graphql                ║
+║  6. Cari header "x-access-token" → copy value-nya        ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
 """

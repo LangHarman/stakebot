@@ -131,15 +131,11 @@ def get_manual_config():
     return cfg, sc, param_label, dir_label
 
 
-async def run_manual(token: str, mirror: bool = False):
+async def run_manual(cfg):
     """Run manual betting mode."""
-    config = StakeConfig(access_token=token)
-    if mirror:
-        config.mirror_mode = True
-
     # Test auth
     print("\n🔄 Testing authentication...")
-    async with StakeClient(config) as client:
+    async with StakeClient(cfg) as client:
         ok = await client.check_auth()
         if not ok:
             print("❌ Authentication failed! Check your access token.")
@@ -157,7 +153,7 @@ async def run_manual(token: str, mirror: bool = False):
     bet_cfg, stop_cfg, param_label, dir_label = get_manual_config()
 
     # Build engine with game-specific place_bet
-    async with StakeClient(config) as client:
+    async with StakeClient(cfg) as client:
         if bet_cfg.game_type == "limbo":
             place_bet_fn = lambda amt, target_multiplier=None, **kw: client.place_limbo_bet(
                 amount=amt, target_multiplier=target_multiplier
