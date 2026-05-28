@@ -1,0 +1,1 @@
+# stakebot core package
