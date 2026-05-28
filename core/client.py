@@ -1,5 +1,5 @@
 """
-Stake.com API client wrapper — pure aiohttp, no stakeapi/cryptography needed.
+Stake.com API client wrapper - pure aiohttp, no stakeapi/cryptography needed.
 Handles auth, mirror domains, GraphQL betting, and session management.
 """
 import json
@@ -59,7 +59,7 @@ class StakeConfigManager:
 
 class StakeClient:
     """
-    Stake.com API client — pure aiohttp.
+    Stake.com API client - pure aiohttp.
     Auto fallback ke mirror kalo domain utama gagal.
     """
 
@@ -121,7 +121,7 @@ class StakeClient:
             try:
                 return await self._try_graphql(url, query, variables, operation_name)
             except PermissionError:
-                # Auth failed — no point trying other mirrors
+                # Auth failed - no point trying other mirrors
                 raise
             except Exception as e:
                 last_err = e
@@ -259,7 +259,21 @@ class StakeClient:
 
     # ── Coin / Currency helpers ────────────────────────────
 
-    CURRENCIES = ["btc", "eth", "usdt", "usdc", "bnb", "ltc", "doge", "xrp", "trx"]
+    CURRENCIES = [
+        "btc", "eth", "usdt", "usdc", "ltc", "doge", "bch", "xrp",
+        "trx", "ada", "dot", "sol", "matic", "avax", "link", "uni",
+        "atom", "near", "ftm", "algo", "apt", "arb", "op", "sui",
+        "inj", "sei", "tia", "aave", "crv", "mkr", "floki", "pepe",
+        "shib", "wif", "bonk", "ens", "eos", "xlm", "zec", "dash",
+        "etc", "waves", "icp", "fil", "vet", "rune", "dydx", "comp",
+        "sushi", "axs", "sand", "mana", "chz", "enj", "gala", "ape",
+        "lrc", "imx", "storj", "stx", "hbar", "flow", "ksm", "rose",
+        "fet", "agix", "ocean", "bat", "grt", "ankr", "blur", "pyth",
+        "ldo", "amp", "mina", "celo", "stark", "strk", "ondo", "io",
+        "zk", "zro", "not", "dogs", "hmstr", "cat", "neiro", "goat",
+        "act", "pnut", "mog", "popcat", "mew", "myro", "slerf", "sc",
+        "poly", "zen", "egld", "kava", "osmo", "busd", "dai", "fdusd",
+    ]
 
     @staticmethod
     def coin_to_stake_currency(coin: str) -> str:

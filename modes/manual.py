@@ -12,11 +12,13 @@ from core.engine import BettingEngine, BetConfig, StopConditions
 
 def select_coin() -> str:
     """Optional coin/currency selection (default: BTC)."""
-    coins = ["btc", "eth", "usdt", "usdc", "bnb", "ltc", "doge", "xrp", "trx"]
-    print("\n  Currency:")
-    for i, c in enumerate(coins, 1):
-        print(f"    {i}. {c.upper()}")
-    print("  (default: BTC, or type a custom symbol)")
+    coins = StakeClient.CURRENCIES
+    print("\n  Currency — enter number or type symbol directly:")
+    # Show top 10 + indicator for more
+    shown = coins[:10]
+    for i, c in enumerate(shown, 1):
+        print(f"    {i:2d}. {c.upper()}")
+    print(f"    ... ({len(coins)} total, type any symbol)")
     choice = input("  Choose [1 - BTC]: ").strip()
     if not choice:
         return "btc"
@@ -26,7 +28,7 @@ def select_coin() -> str:
             return coins[idx]
     except ValueError:
         pass
-    # Maybe user typed a custom symbol like "sol"
+    # User typed a symbol e.g. "sol", "pepe"
     return choice.lower().strip()
 
 
