@@ -128,30 +128,20 @@ async def cmd_balance(args, mirror_info: dict):
 
     cfg = build_config(token, mirror_info)
     async with StakeClient(cfg) as client:
-        ok = await client.check_auth()
-        if not ok:
+        user_info = await client.get_user_info()
+        if not user_info:
             print("❌ Auth failed! Token invalid/expired atau domain salah.")
             print(f"   Domain: {cfg.base_url}")
             print("   Coba: python main.py auth --mirror auto")
             return
-        print(f"✅ Auth OK ({cfg.base_url})")
+        print(f"✅ Welcome, {user_info['name']}!")
+        print(f"   Level: {user_info['level']}  |  KYC: Tier {user_info['kyc']}")
         print()
 
-        # Simple balance (crypto only)
-        bal = await client.get_balance_simple()
-        if "error" not in bal:
-            print("💰  BALANCE — Crypto")
-            for c, amt in bal.items():
-                if amt > 0:
-                    print(f"     {amt:.8f} {c.upper()}")
-
-            print()
-            # IDR conversion
-            print("🇮🇩  BALANCE — Rupiah")
-            idr_str = await client.get_balance_idr()
-            print(idr_str)
-        else:
-            print(f"  Error: {bal['error']}")
+        # Show ALL balances
+        print("💰  BALANCES")
+        idr_str = await client.get_balance_idr()
+        print(idr_str)
 
 
 async def cmd_manual(args, mirror_info: dict):

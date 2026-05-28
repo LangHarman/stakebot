@@ -180,21 +180,20 @@ async def run_manual(cfg):
 
     # Use ONE single session for everything
     async with StakeClient(cfg) as client:
-        # Test auth
+        # Test auth + show user info
         print("\n🔄 Testing authentication...")
-        ok = await client.check_auth()
-        if not ok:
+        user_info = await client.get_user_info()
+        if not user_info:
             print("❌ Authentication failed! Check your access token.")
             print("   Run: python main.py auth")
             return
-        print("✅ Authentication OK!")
+        print(f"✅ Welcome, {user_info['name']}!")
+        print(f"   Level: {user_info['level']}  |  KYC: Tier {user_info['kyc']}")
 
-        # Show full balance with IDR
-        print("\n💰 BALANCE")
+        # Show ALL balances with IDR
+        print("\n💰 ALL BALANCES")
         idr_str = await client.get_balance_idr()
         print(idr_str)
-        if "error" in idr_str:
-            print("  (IDR conversion unavailable)")
 
         # Small delay to avoid rate limits
         await asyncio.sleep(0.5)
@@ -222,12 +221,12 @@ async def run_manual(cfg):
         if bet_cfg.game_type == "limbo":
             async def place_fn(amount, target_multiplier=None, **kw):
                 return await client.place_limbo_bet(
-                    amount=amount, target_multiplier=target_multiplier, currency=coin
+                    amount=amount, target_multiplier=target_multiplier
                 )
         else:
             async def place_fn(amount, target=None, over=None, **kw):
                 return await client.place_dice_bet(
-                    amount=amount, target=target, over=over, currency=coin
+                    amount=amount, target=target, over=over
                 )
 
         engine = BettingEngine(

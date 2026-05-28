@@ -329,18 +329,15 @@ async def run_script(cfg, script_path: str, max_bets: int = 0):
         input()
 
         # Build game-specific place_bet function
-        coin = "btc"  # default coin for script mode
         if game_type == "limbo":
             async def bet_fn(amount, target_multiplier=None, **kw):
                 return await client.place_limbo_bet(
-                    amount=amount, target_multiplier=target_multiplier,
-                    currency=coin
+                    amount=amount, target_multiplier=target_multiplier
                 )
         else:
             async def bet_fn(amount, target=None, over=None, **kw):
                 return await client.place_dice_bet(
-                    amount=amount, target=target, over=over,
-                    currency=coin
+                    amount=amount, target=target, over=over
                 )
 
         engine = BettingEngine(

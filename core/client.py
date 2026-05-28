@@ -179,14 +179,36 @@ class StakeClient:
     # ── Auth / Balance ──────────────────────────────────────
 
     async def check_auth(self) -> bool:
-        """Test if access token works (tries mirrors if enabled)."""
+        """Quick check if token works."""
+        info = await self.get_user_info()
+        return info is not None
+
+    async def get_user_info(self) -> dict:
+        """Get user info: id, name, level, KYC tier."""
         try:
             data = await self._graphql_request("""
-                query { user { id name } }
-            """)
-            return data.get("user") is not None
+                query UserInfo {
+                    user {
+                        id
+                        name
+                        level
+                        kyc {
+                            level
+                        }
+                    }
+                }
+            """, operation_name="UserInfo")
+            user = data.get("user", {})
+            if not user:
+                return None
+            return {
+                "id": user.get("id", "?"),
+                "name": user.get("name", "?"),
+                "level": user.get("level", 0),
+                "kyc": (user.get("kyc") or {}).get("level", 0),
+            }
         except Exception:
-            return False
+            return None
 
     async def get_balance_simple(self) -> dict:
         """Get simplified balance (handles both dict & list formats)."""
@@ -299,20 +321,19 @@ class StakeClient:
 
     # ── Dice ────────────────────────────────────────────────
 
-    async def place_dice_bet(self, amount: float, target: float, over: bool,
-                              currency: str = "btc") -> dict:
-        curr = self.coin_to_stake_currency(currency)
+    async def place_dice_bet(self, amount: float, target: float, over: bool) -> dict:
+        """Place a Dice bet."""
         query = """
-        mutation DicePlay($amount: Float!, $target: Float!, $over: Boolean!, $currency: Currency!) {
-            dicePlay(input: { amount: $amount, target: $target, over: $over, currency: $currency }) {
-                id amount payout multiplier outcome currency
+        mutation DicePlay($amount: Float!, $target: Float!, $over: Boolean!) {
+            dicePlay(input: { amount: $amount, target: $target, over: $over }) {
+                id amount payout multiplier outcome
                 user { balance }
             }
         }
         """
         try:
             data = await self._graphql_request(query, {
-                "amount": amount, "target": target, "over": over, "currency": curr
+                "amount": amount, "target": target, "over": over
             })
             r = data.get("dicePlay", {})
             return {
@@ -323,28 +344,27 @@ class StakeClient:
                 "outcome": r.get("outcome", ""),
                 "won": r.get("outcome") == "win",
                 "balance_after": r.get("user", {}).get("balance"),
-                "currency": r.get("currency", currency),
+                "currency": "btc",
             }
         except Exception as e:
             return {"error": str(e)}
 
     # ── Limbo ───────────────────────────────────────────────
 
-    async def place_limbo_bet(self, amount: float, target_multiplier: float,
-                               currency: str = "btc") -> dict:
-        curr = self.coin_to_stake_currency(currency)
+    async def place_limbo_bet(self, amount: float, target_multiplier: float) -> dict:
+        """Place a Limbo bet."""
         query = """
-        mutation LimboPlay($amount: Float!, $targetMultiplier: Float!, $currency: Currency!) {
-            limboPlay(input: { amount: $amount, targetMultiplier: $targetMultiplier, currency: $currency }) {
+        mutation LimboPlay($amount: Float!, $targetMultiplier: Float!) {
+            limboPlay(input: { amount: $amount, targetMultiplier: $targetMultiplier }) {
                 id amount payout multiplier outcome
-                crashMultiplier targetMultiplier currency
+                crashMultiplier targetMultiplier
                 user { balance }
             }
         }
         """
         try:
             data = await self._graphql_request(query, {
-                "amount": amount, "targetMultiplier": target_multiplier, "currency": curr
+                "amount": amount, "targetMultiplier": target_multiplier
             })
             r = data.get("limboPlay", {})
             return {
@@ -357,7 +377,7 @@ class StakeClient:
                 "balance_after": r.get("user", {}).get("balance"),
                 "crash_point": float(r.get("crashMultiplier", 0)),
                 "target_multiplier": float(r.get("targetMultiplier", 0)),
-                "currency": r.get("currency", currency),
+                "currency": "btc",
             }
         except Exception as e:
             return {"error": str(e)}
