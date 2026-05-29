@@ -39,6 +39,7 @@ class BetStats:
     wins: int = 0
     losses: int = 0
     profit: float = 0.0
+    total_wagered: float = 0.0
     streak: int = 0  # positive=win streak, negative=loss streak
     best_streak: int = 0
     worst_streak: int = 0
@@ -50,6 +51,7 @@ class BetStats:
 
     def record(self, amount: float, payout: float, won: bool):
         self.bets += 1
+        self.total_wagered += amount
         pnl = (payout - amount) if won else -amount
         self.profit += pnl
 

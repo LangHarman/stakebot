@@ -114,47 +114,34 @@ def _splash():
 # ═════════════════════════════════════════════
 
 class LiveDisplay:
-    """Real-time betting display — updates in-place."""
+    """Real-time betting display — compact 1-line updates."""
 
     def __init__(self, game: str, coin: str, name: str):
         self.game = game
         self.coin = coin
         self.name = name
-        self._lines = 0
+        self._header = False
 
     def init(self):
         _cls()
         icon = "🚀" if self.game == "limbo" else "🎲"
         gname = "LIMBO" if self.game == "limbo" else "DICE"
-        bar = f"{_c('cyan')}{'═'*42}{_c('reset')}"
-        lines = [
-            f"{_c('cyan')}╔{'═'*42}╗{_c('reset')}",
-            f"{_c('cyan')}║{_c('reset')}  {icon} {_c('yellow')}{gname} LIVE{_c('reset')} — {_c('green')}{self.name}{_c('reset')}" + " " * 15 + f"{_c('cyan')}║{_c('reset')}",
-            f"{_c('cyan')}╠{'═'*42}╣{_c('reset')}",
-            f"{_c('cyan')}║{_c('reset')}  {_c('dim')}Starting...{_c('reset')}" + " " * 30 + f"{_c('cyan')}║{_c('reset')}",
-            f"{_c('cyan')}╚{'═'*42}╝{_c('reset')}",
-        ]
-        click.echo("\n".join(lines))
-        self._lines = 5
+        click.echo(f"{icon} {_c('yellow', gname)} {_c('dim', 'LIVE')} — {_c('green', self.name)} | {self.coin.upper()}")
+        click.echo(f"{_c('dim', '─'*50)}")
+        click.echo(f"{_c('dim', '#Bet    Amount          PnL            Balance        Total Wager')}")
+        self._header = True
 
-    def update(self, bet_id: int, won: bool, streak: int, profit: float,
-               balance: float, amount: float, winrate: float,
-               last: str, payout: float):
-        pcol = "green" if profit >= 0 else "red"
-        scol = "red" if streak < 0 else "green"
-        ssign = "" if streak < 0 else "+"
-        lines = [
-            f"{_c('cyan')}╔{'═'*42}╗{_c('reset')}",
-            f"{_c('cyan')}║{_c('reset')}  #{bet_id} {'✅' if won else '❌'}  {_c('dim')}S:{_c('reset')}{_c(scol, ssign + str(streak))}  {_c('dim')}P:{_c('reset')}{_c(pcol, f'{profit:+.8f}')}  {_c('dim')}WR:{_c('reset')}{winrate:.0f}%   {_c('cyan')}║{_c('reset')}",
-            f"{_c('cyan')}║{_c('reset')}  {_c('dim')}Bet:{_c('reset')} {amount:.8f}  {_c('dim')}Bal:{_c('reset')} {balance:.8f} {self.coin.upper()}" + " " * 6 + f"{_c('cyan')}║{_c('reset')}",
-            f"{_c('cyan')}╠{'═'*42}╣{_c('reset')}",
-            f"{_c('cyan')}║{_c('reset')}  {last}" + " " * (42 - len(last)) + f"{_c('cyan')}║{_c('reset')}",
-            f"{_c('cyan')}╚{'═'*42}╝{_c('reset')}",
-        ]
-        if self._lines > 0:
-            click.echo(f"\033[{self._lines}A", nl=False)
-        click.echo("\n".join(lines))
-        self._lines = 6
+    def update(self, bet_id: int, won: bool, amount: float,
+               pnl: float, balance: float, total_wagered: float):
+        flag = "✅" if won else "❌"
+        pcol = "green" if pnl >= 0 else "red"
+        pnl_s = f"{pnl:+.8f}" if pnl >= 0 else f"{pnl:.8f}"
+        line = (f"{flag} #{bet_id:<5} "
+                f"{amount:.8f}  "
+                f"{_c(pcol, pnl_s)}  "
+                f"{balance:.8f}  "
+                f"{total_wagered:.8f}")
+        click.echo(line)
 
 
 # ═════════════════════════════════════════════
@@ -453,15 +440,11 @@ async def _run_live(cfg: StakeConfig, bc: BetConfig, lua,
             else:
                 stats.current_balance += (payout - amount) if won else -amount
 
-            if bc.game == "dice":
-                last = f"{'✅ WON' if won else '❌ LOST'}  Roll: {result.get('result',0):.1f}  Payout: {payout:.8f}"
-            else:
-                last = f"{'✅ WON' if won else '❌ LOST'}  Crash: {result.get('crash_point',0):.2f}x  Payout: {payout:.8f}"
+            pnl = (payout - amount) if won else -amount
 
-            display.update(bet_id=stats.bets, won=won, streak=stats.streak,
-                          profit=stats.profit, balance=stats.current_balance,
-                          amount=amount, winrate=stats.winrate,
-                          last=last, payout=payout)
+            display.update(bet_id=stats.bets, won=won, amount=amount,
+                          pnl=pnl, balance=stats.current_balance,
+                          total_wagered=stats.total_wagered)
 
             logger.record(bet_id=stats.bets, amount=amount, target=bc.target,
                          condition=bc.condition, won=won, payout=payout,
