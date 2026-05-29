@@ -85,24 +85,41 @@ def cli():
 
 
 @cli.command()
-@click.option("--mirror", default="auto",
-              type=click.Choice(["auto", "none", *[m.replace("https://", "") for m in KNOWN_MIRRORS]]))
-@click.option("--force", is_flag=True, help="Simpan token tanpa verifikasi")
-def auth(mirror, force):
-    """🔑 Simpan access token."""
-    token = click.prompt("  Paste x-access-token", hide_input=True)
-    cfg = StakeConfig(access_token=token, mirror_mode=True)
-    if mirror and mirror != "auto" and mirror != "none":
-        cfg.base_url = f"https://{mirror}"
+def auth():
+    """🔑 Setup: pilih mirror → paste token → simpan."""
+    click.echo(f"\n{Fore.CYAN}╔══════════════════════════════════════╗")
+    click.echo(f"║  {Fore.YELLOW}Setup StakeBot — Pilih Mirror dulu{Fore.CYAN}     ║")
+    click.echo(f"╚══════════════════════════════════════╝{Fore.RESET}")
 
-    if force:
-        StakeConfigManager.save(cfg)
-        click.echo(f"{Fore.GREEN}  ✅ Token disimpan (tanpa verifikasi).{Fore.RESET}")
-        click.echo(f"     Jalankan: {Fore.YELLOW}python main.py balance{Fore.RESET}")
-        return
+    # 1. Pilih mirror
+    mirror_options = ["auto (cari sendiri)", "stake.mba", "stake.com", "playstake.club"]
+    click.echo(f"\n{Fore.YELLOW}🌐 Pilih mirror domain:{Fore.RESET}")
+    for i, opt in enumerate(mirror_options, 1):
+        click.echo(f"  {i}. {opt}")
+    mirror_choice = click.prompt("  Pilihan", type=int, default=1)
+    mirror_map = {"auto": "auto", "stake.mba": "stake.mba", "stake.com": "stake.com", "playstake.club": "playstake.club"}
+    idx = min(max(mirror_choice, 1), len(mirror_options))
+    selected = mirror_options[idx - 1]
+    if selected == mirror_options[0]:
+        mirror_val = "auto"
+    else:
+        mirror_val = selected
+    click.echo(f"  → {Fore.GREEN}{mirror_val}{Fore.RESET}")
 
-    click.echo(f"{Fore.YELLOW}  Verifikasi token...{Fore.RESET}")
+    # 2. Minta token
+    click.echo(f"\n{Fore.YELLOW}🔑 Sekarang paste x-access-token:{Fore.RESET}")
+    click.echo(f"  {Fore.CYAN}(buka {mirror_val if mirror_val != 'auto' else 'mirror mana aja'} di Kiwi Browser → DevTools → cari x-access-token di headers){Fore.RESET}")
+    token = click.prompt(f"  Token", hide_input=True)
 
+    # 3. Simpan config
+    cfg = StakeConfig(access_token=token, mirror_mode=(mirror_val == "auto"))
+    if mirror_val != "auto":
+        cfg.base_url = f"https://{mirror_val}"
+    StakeConfigManager.save(cfg)
+    click.echo(f"{Fore.GREEN}  ✅ Config disimpan!{Fore.RESET}")
+    click.echo(f"\n{Fore.YELLOW}  Tes koneksi sebentar...{Fore.RESET}")
+
+    # 4. Coba verifikasi
     async def _verify():
         try:
             async with StakeClient(cfg) as client:
@@ -110,23 +127,18 @@ def auth(mirror, force):
                 if user:
                     click.echo(f"{Fore.GREEN}  ✅ Berhasil! Login sebagai:{Fore.RESET}")
                     click.echo(f"     👤 {user['name']}  Level {user['level']}  KYC Tier {user['kyc']}")
-                    StakeConfigManager.save(cfg)
-                    click.echo(f"{Fore.GREEN}  ✅ Token disimpan di {cfg.config_path}{Fore.RESET}")
-                else:
-                    click.echo(f"{Fore.RED}  ❌ Gagal:{Fore.RESET} token tidak dikenal")
-                    if click.confirm(f"  Tetap simpan token? (mungkin koneksi bermasalah)", default=True):
-                        StakeConfigManager.save(cfg)
-                        click.echo(f"{Fore.GREEN}  ✅ Token disimpan.{Fore.RESET}")
-        except Exception as e:
-            err_str = str(e)
-            click.echo(f"{Fore.RED}  ❌ Gagal verifikasi: {err_str[:80]}{Fore.RESET}")
-            click.echo(f"     Kemungkinan: token expired, domain diblokir, atau koneksi error.")
-            if click.confirm(f"  Tetap simpan token & coba lagi nanti?", default=True):
-                StakeConfigManager.save(cfg)
-                click.echo(f"{Fore.GREEN}  ✅ Token disimpan.{Fore.RESET}")
-                click.echo(f"     Jalankan: {Fore.YELLOW}python main.py balance{Fore.RESET} buat tes")
+                    return True
+        except:
+            pass
+        click.echo(f"{Fore.YELLOW}  ⚠️  Gagal verifikasi (token mungkin expired / koneksi error){Fore.RESET}")
+        click.echo(f"     Config tetap tersimpan. Nanti coba: {Fore.WHITE}python main.py balance{Fore.RESET}")
+        return False
 
     asyncio.run(_verify())
+    click.echo(f"\n{Fore.GREEN}✅ Setup selesai! Sekarang tinggal main:{Fore.RESET}")
+    click.echo(f"  {Fore.WHITE}python main.py{Fore.RESET}         → menu interaktif (pilih game, coin, script)")
+    click.echo(f"  {Fore.WHITE}python main.py balance{Fore.RESET}  → lihat saldo")
+    click.echo(f"  {Fore.WHITE}python main.py run{Fore.RESET}      → langsung main")
 
 
 @cli.command()
