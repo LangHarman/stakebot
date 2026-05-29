@@ -7,8 +7,8 @@ import asyncio
 import uuid
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass
-
+from dataclasses import dataclass, field
+import re
 import aiohttp
 
 
@@ -32,6 +32,7 @@ class StakeConfig:
     base_url: str = "https://stake.com"
     mirror_mode: bool = False
     config_path: Path = Path.home() / ".stakebot" / "config.json"
+    proxy: str = ""  # Optional proxy URL (http://127.0.0.1:8080)
 
 
 class StakeConfigManager:
@@ -54,6 +55,7 @@ class StakeConfigManager:
             "session_cookie": cfg.session_cookie,
             "base_url": cfg.base_url,
             "mirror_mode": cfg.mirror_mode,
+            "proxy": cfg.proxy,
         }, indent=2, ensure_ascii=False))
         path.chmod(0o600)
 
@@ -151,7 +153,14 @@ class StakeClient:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            connector_kwargs = {}
+            if self.config.proxy:
+                # Support socks5 proxy if aiohttp_socks installed
+                connector_kwargs["trust_env"] = True
+
+            self._session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(**connector_kwargs)
+            )
             self._headers = {
                 "x-access-token": self.config.access_token,
                 "Content-Type": "application/json",
@@ -162,7 +171,7 @@ class StakeClient:
                 ),
             }
             if self.config.session_cookie:
-                self._headers["Cookie"] = f"session={self.config.session_cookie}"
+                self._headers["Cookie"] = self.config.session_cookie
         return self._session
 
     async def close(self):
@@ -405,6 +414,40 @@ class StakeClient:
             }
         except Exception as e:
             return {"error": str(e)}
+
+
+def parse_curl(curl_text: str) -> dict:
+    """Parse cURL command from browser DevTools into headers dict.
+
+    Example:
+      curl 'https://stake.com/_api/graphql' -H 'x-access-token: abc' -H 'cookie: foo=bar'
+    Returns: {"headers": {"x-access-token": "abc", ...}, "url": "...", "cookie": "..."}
+    """
+    result = {"headers": {}, "url": "", "cookie": ""}
+
+    # Extract URL (first quoted argument after curl)
+    url_match = re.search(r"curl\s+'([^']+)'", curl_text)
+    if url_match:
+        result["url"] = url_match.group(1)
+
+    # Extract all -H headers
+    headers_raw = re.findall(r"-H\s+'([^']+)'", curl_text)
+    for h in headers_raw:
+        if ": " in h:
+            key, val = h.split(": ", 1)
+            result["headers"][key.lower()] = val
+
+    # Extract cookie separately
+    cookie = result["headers"].get("cookie", "")
+    if cookie:
+        result["cookie"] = cookie
+
+    # Extract access token
+    token = result["headers"].get("x-access-token", "")
+    if token:
+        result["access_token"] = token
+
+    return result
 
 
 async def test_auth(token: str) -> bool:
