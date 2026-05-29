@@ -121,6 +121,7 @@ class LiveDisplay:
         self.coin = coin
         self.name = name
         self._header = False
+        self._prev_won = True  # track streak for coloring
 
     def init(self):
         _cls()
@@ -131,10 +132,19 @@ class LiveDisplay:
 
     def update(self, bet_id: int, won: bool, amount: float,
                pnl: float, balance: float, total_wagered: float):
+        # Color logic for bet amount
+        if not won:
+            amt_col = "red"          # loss streak
+        elif not self._prev_won:
+            amt_col = "yellow"       # win after loss streak — recovery!
+        else:
+            amt_col = ""             # normal white
+        self._prev_won = won
+
         pcol = "green" if pnl >= 0 else "red"
         pnl_s = f"{pnl:+.8f}" if pnl >= 0 else f"{pnl:.8f}"
         line = (f"#{bet_id:<4} "
-                f"{amount:.8f}  "
+                f"{_c(amt_col, f'{amount:.8f}')}  "
                 f"{_c(pcol, pnl_s)}  "
                 f"{balance:.8f}  "
                 f"{total_wagered:.8f}")
