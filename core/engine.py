@@ -1,401 +1,317 @@
 """
-Betting engine - handles the core loop for both manual and script modes.
-Manages bet lifecycle, stop conditions, and statistics tracking.
+Betting engine for StakeBot.
+Orchestrates the betting loop: read config → place bet → check stop conditions → repeat.
+Uses the LUA scripting engine for strategy.
 """
-import time
-import signal
-import sys
 import asyncio
+import time
+from typing import Optional, Callable, Awaitable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
-
-@dataclass
-class BetStats:
-    """Track betting statistics."""
-    total_bets: int = 0
-    wins: int = 0
-    losses: int = 0
-    total_wagered: float = 0.0
-    total_payout: float = 0.0
-    net_profit: float = 0.0
-    current_streak: int = 0  # positive = win streak, negative = loss streak
-    biggest_win: float = 0.0
-    biggest_loss: float = 0.0
-    start_balance: float = 0.0
-    current_balance: float = 0.0
-
-    @property
-    def win_rate(self) -> float:
-        if self.total_bets == 0:
-            return 0.0
-        return (self.wins / self.total_bets) * 100
-
-    @property
-    def profit(self) -> float:
-        return self.net_profit
-
-    def record_bet(self, amount: float, won: bool, payout: float):
-        self.total_bets += 1
-        self.total_wagered += amount
-
-        if won:
-            self.wins += 1
-            self.total_payout += payout
-            net = payout - amount
-            self.net_profit += net
-            self.current_streak = self.current_streak + 1 if self.current_streak >= 0 else 1
-            if payout > self.biggest_win:
-                self.biggest_win = payout
-        else:
-            self.losses += 1
-            self.net_profit -= amount
-            self.current_streak = self.current_streak - 1 if self.current_streak <= 0 else -1
-            if amount > self.biggest_loss:
-                self.biggest_loss = amount
-
-
-@dataclass
-class StopConditions:
-    """Bot stop conditions."""
-    max_bets: int = 0          # 0 = unlimited
-    target_profit: float = 0.0 # 0 = no target
-    max_loss: float = 0.0      # 0 = no limit
-    max_streak: int = 0        # 0 = no limit
-    max_balance: float = 0.0   # 0 = no limit
-    min_balance: float = 0.0   # 0 = no limit
+from core.client import StakeClient
+from core.script_engine import LuaScriptEngine
 
 
 @dataclass
 class BetConfig:
-    """Bet configuration."""
-    game_type: str = "dice"  # "dice" or "limbo"
-    base_bet: float = 0.000001
-    currency: str = "btc"
-    chance: float = 49.5
-    payout_multiplier: float = 0.0  # Auto-calculated from chance if 0
-    bet_high: bool = True
-    on_win: str = "reset"
-    on_loss: str = "reset"
-    increase_pct: float = 100.0
-    decrease_pct: float = 0.0
+    """Betting configuration."""
+    game_type: str = "dice"       # "dice" or "limbo"
+    coin: str = "btc"
+    base_bet: float = 0.00000001
+    target: float = 49.5          # chance for dice, multiplier for limbo
+    over: bool = True              # dice: bet high
+    max_bet: float = 0.0          # 0 = no limit
+    target_profit: float = 0.0     # stop when profit >= this
+    target_loss: float = 0.0       # stop when loss >= this
+    target_balance: float = 0.0    # stop when balance >= this
+    max_bets: int = 0              # 0 = unlimited
+    max_seconds: int = 0           # 0 = unlimited
 
-    # Limbo-specific
-    target_multiplier: float = 2.0  # Limbo target (overrides chance)
+    def to_dict(self) -> dict:
+        return {
+            "game_type": self.game_type,
+            "coin": self.coin,
+            "base_bet": self.base_bet,
+            "target": self.target,
+            "over": self.over,
+            "max_bet": self.max_bet,
+            "target_profit": self.target_profit,
+            "target_loss": self.target_loss,
+            "target_balance": self.target_balance,
+            "max_bets": self.max_bets,
+            "max_seconds": self.max_seconds,
+        }
 
-    def get_payout(self) -> float:
-        if self.payout_multiplier > 0:
-            return self.payout_multiplier
-        if self.game_type == "limbo":
-            return self.target_multiplier
-        if self.chance <= 0:
-            return 2.0
-        return round((99.0 / self.chance) * 0.99, 4)
 
-    def get_target(self) -> float:
-        """Get the target parameter for betting.
-        - Dice: target number (0-100)
-        - Limbo: target multiplier
-        """
-        if self.game_type == "limbo":
-            return self.target_multiplier
-        if self.bet_high:
-            return round(100 - (self.chance * 100 / 100), 2)
+@dataclass
+class BetStats:
+    """Running statistics."""
+    bets_placed: int = 0
+    wins: int = 0
+    losses: int = 0
+    total_profit: float = 0.0
+    total_wagered: float = 0.0
+    largest_bet: float = 0.0
+    largest_win: float = 0.0
+    current_streak: int = 0
+    start_balance: float = 0.0
+    current_balance: float = 0.0
+    start_time: float = 0.0
+    last_bet_info: dict = field(default_factory=dict)
+
+    def add_result(self, bet_result: dict):
+        """Update stats with a bet result."""
+        amount = bet_result.get("amount", 0)
+        payout = bet_result.get("payout", 0)
+        won = bet_result.get("won", False)
+
+        self.bets_placed += 1
+        self.total_wagered += amount
+
+        if won:
+            self.wins += 1
+            profit = payout - amount
+            self.total_profit += profit
+            self.current_streak = abs(self.current_streak) + 1
+            if payout > self.largest_win:
+                self.largest_win = payout
         else:
-            return round(self.chance * 100 / 100, 2)
+            self.losses += 1
+            self.total_profit -= amount
+            self.current_streak = -abs(self.current_streak) - 1
 
-    def get_direction(self) -> bool:
-        """Get bet direction. Only relevant for dice."""
-        return self.bet_high
+        if amount > self.largest_bet:
+            self.largest_bet = amount
+
+        self.current_balance = bet_result.get("balance_after", self.current_balance)
+        self.last_bet_info = bet_result
+
+    def elapsed_seconds(self) -> float:
+        return time.time() - self.start_time
+
+    def summary(self) -> str:
+        elapsed = self.elapsed_seconds()
+        hours, rem = divmod(int(elapsed), 3600)
+        mins, secs = divmod(rem, 60)
+        time_str = f"{hours:02d}:{mins:02d}:{secs:02d}"
+
+        roi = (self.total_profit / self.total_wagered * 100) if self.total_wagered > 0 else 0
+
+        return (
+            f"  ⏱ Elapsed: {time_str}   #️⃣ Bets: {self.bets_placed}\n"
+            f"  ✅ Wins: {self.wins}   ❌ Losses: {self.losses}   📊 Streak: {self.current_streak:+d}\n"
+            f"  💰 Profit: {self.total_profit:.8f}   ROI: {roi:+.2f}%\n"
+            f"  🏆 Largest Bet: {self.largest_bet:.8f}   Largest Win: {self.largest_win:.8f}"
+        )
+
+    def short_line(self) -> str:
+        elapsed = self.elapsed_seconds()
+        return (
+            f"[#{self.bets_placed}] "
+            f"{'✅' if self.last_bet_info.get('won') else '❌'} "
+            f"{'W' if self.last_bet_info.get('won') else 'L':>4} "
+            f"S{self.current_streak:+d} "
+            f"P{self.total_profit:+.8f} "
+            f"B{self.current_balance:.8f}"
+        )
 
 
 class BettingEngine:
-    """
-    Core betting engine.
-    Runs the betting loop, manages stop conditions, and
-    calls the strategy callback after each result.
-    """
+    """Main betting loop engine."""
 
-    def __init__(
-        self,
-        place_bet_fn: Callable,
-        get_balance_fn: Callable,
-    ):
-        """
-        Args:
-            place_bet_fn: async callable(amount, target, over) -> dict
-            get_balance_fn: async callable() -> dict
-        """
-        self.place_bet = place_bet_fn
-        self.get_balance = get_balance_fn
+    def __init__(self, client: StakeClient, config: BetConfig,
+                 lua_engine: LuaScriptEngine = None,
+                 on_bet_placed: Callable = None,
+                 on_error: Callable = None):
+        self.client = client
+        self.config = config
+        self.lua = lua_engine
+        self.on_bet_placed = on_bet_placed
+        self.on_error = on_error
         self.stats = BetStats()
-        self.stop_conditions = StopConditions()
-        self.config = BetConfig()
-        self.running = False
-        self.paused = False
-        self._strategy_fn: Optional[Callable] = None
-        self._on_result_fn: Optional[Callable] = None
-        self._abort = False
+        self._running = False
 
-        # LUA script context (used by script mode)
-        self.script_context = {}
-
-    def set_strategy(self, fn: Callable):
-        """
-        Set strategy callback.
-        Called after each bet result with (won, amount, payout, stats).
-        Should return dict with optional overrides: nextbet, chance, high
-        """
-        self._strategy_fn = fn
-
-    def on_result(self, fn: Callable):
-        """Set result callback for UI updates."""
-        self._on_result_fn = fn
-
-    def check_stop_conditions(self) -> Optional[str]:
-        """Check all stop conditions. Returns reason string or None."""
-        if self._abort:
-            return "Manual abort"
-
-        s = self.stats
-        c = self.stop_conditions
-
-        if c.max_bets > 0 and s.total_bets >= c.max_bets:
-            return f"Max bets reached ({c.max_bets})"
-
-        if c.target_profit > 0 and s.net_profit >= c.target_profit:
-            return f"Target profit reached (${c.target_profit})"
-
-        if c.max_loss > 0 and s.net_profit <= -c.max_loss:
-            return f"Max loss reached (${c.max_loss})"
-
-        if c.max_streak > 0 and abs(s.current_streak) >= c.max_streak:
-            direction = "win" if s.current_streak > 0 else "loss"
-            return f"Max {direction} streak reached ({abs(s.current_streak)})"
-
-        if c.max_balance > 0 and s.current_balance >= c.max_balance:
-            return f"Max balance reached (${c.max_balance})"
-
-        if c.min_balance > 0 and s.current_balance <= c.min_balance:
-            return f"Min balance reached (${c.min_balance})"
-
-        return None
-
-    def get_next_bet(self, won: bool) -> dict:
-        """
-        Calculate next bet based on manual config.
-        Returns dict: {amount, target, over}
-        """
-        cfg = self.config
-
-        # Start with base bet
-        if self.stats.total_bets == 0:
-            next_amount = cfg.base_bet
-        else:
-            if won:
-                if cfg.on_win == "reset":
-                    next_amount = cfg.base_bet
-                elif cfg.on_win == "increase":
-                    next_amount = self._last_amount * (1 + cfg.increase_pct / 100)
-                elif cfg.on_win == "decrease":
-                    next_amount = self._last_amount * (1 - cfg.decrease_pct / 100)
-                else:  # same
-                    next_amount = self._last_amount
-            else:
-                if cfg.on_loss == "reset":
-                    next_amount = cfg.base_bet
-                elif cfg.on_loss == "increase":
-                    next_amount = self._last_amount * (1 + cfg.increase_pct / 100)
-                elif cfg.on_loss == "decrease":
-                    next_amount = self._last_amount * (1 - cfg.decrease_pct / 100)
-                else:  # same
-                    next_amount = self._last_amount
-
-        target = cfg.get_target()
-        return {
-            "amount": round(next_amount, 8),
-            "target": target,
-            "over": cfg.bet_high,
-            "game_type": cfg.game_type,
-        }
-
-    async def run(self):
-        """
-        Main betting loop.
-        """
-        self.running = True
-        self.paused = False
-        self._abort = False
+    async def run(self) -> BetStats:
+        """Run the betting loop."""
+        self._running = True
+        self.stats.start_time = time.time()
 
         # Get initial balance
-        try:
-            balance_data = await self.get_balance()
-            if isinstance(balance_data, dict):
-                bal = balance_data.get("available", 0) or balance_data.get("btc", 0)
-                self.stats.start_balance = float(bal)
-                self.stats.current_balance = float(bal)
-        except Exception as e:
-            print(f"[!] Failed to get initial balance: {e}")
-            self.running = False
-            return
+        await self._update_balance()
 
-        game_label = "Limbo" if self.config.game_type == "limbo" else "Dice"
-        param_label = f"{self.config.target_multiplier}x" if self.config.game_type == "limbo" else f"{self.config.chance}%"
-        print(f"\n🚀 Starting {game_label} bot — Balance: {self.stats.start_balance:.8f}")
-        print(f"   Base bet: {self.config.base_bet} | Target: {param_label}")
-        print(f"   Stop conditions: {self._stop_summary()}")
-        print("─" * 50)
+        if self.stats.current_balance <= 0:
+            err_msg = f"⚠️ Balance is 0 (coin: {self.config.coin}). Check your wallet."
+            if self.on_error:
+                await self.on_error(err_msg)
+            return self.stats
 
-        self._last_amount = self.config.base_bet
+        self.stats.start_balance = self.stats.current_balance
 
-        while self.running and not self._abort:
-            # Check for pause
-            if self.paused:
-                await asyncio.sleep(0.5)
-                continue
-
-            # Check stop conditions
-            reason = self.check_stop_conditions()
-            if reason:
-                print(f"\n⏹️  Stopped: {reason}")
+        # Main loop
+        while self._running:
+            # ── Check global stop conditions ──
+            if self.lua and self.lua.should_stop():
                 break
 
-            # Determine next bet
-            bet_info = None
-            if self._strategy_fn:
-                # Strategy function returns overrides
+            # Check max bets
+            if self.config.max_bets > 0 and self.stats.bets_placed >= self.config.max_bets:
+                break
+
+            # Check max time
+            if self.config.max_seconds > 0 and self.stats.elapsed_seconds() >= self.config.max_seconds:
+                break
+
+            # Check profit/loss targets
+            if self.config.target_profit > 0 and self.stats.total_profit >= self.config.target_profit:
+                break
+            if self.config.target_loss > 0 and self.stats.total_profit <= -self.config.target_loss:
+                break
+            if self.config.target_balance > 0 and self.stats.current_balance >= self.config.target_balance:
+                break
+
+            # ── Determine bet amount using LUA ──
+            if self.lua:
                 try:
-                    bet_info = self._strategy_fn(self.stats)
-                except StopIteration:
-                    print("\n⏹️  Script requested stop")
-                    break
+                    state_update = {
+                        "balance": self.stats.current_balance,
+                        "bets": self.stats.bets_placed,
+                        "profit": self.stats.total_profit,
+                        "wins": self.stats.wins,
+                        "losses": self.stats.losses,
+                        "currentstreak": self.stats.current_streak,
+                        "previousbet": self.stats.last_bet_info.get("amount", 0),
+                        "seedChanged": False,
+                        "isFirstGreen": self.stats.last_bet_info.get("won", False) and self.stats.bets_placed > 1,
+                        "isFirstRed": not self.stats.last_bet_info.get("won", True) and self.stats.bets_placed > 1,
+                        "isResetProfitReached": False,
+                        "isResetLossReached": False,
+                        "isResetWinStreakReached": False,
+                        "isResetLoseStreakReached": False,
+                        "isMaxBetReached": False,
+                    }
+
+                    # Check reset conditions
+                    if self.lua.s.get("resetIfProfit", 0) > 0 and self.stats.total_profit >= self.lua.s["resetIfProfit"]:
+                        state_update["isResetProfitReached"] = True
+                    if self.lua.s.get("resetIfLose", 0) > 0 and self.stats.total_profit <= -self.lua.s["resetIfLose"]:
+                        state_update["isResetLossReached"] = True
+                    if self.lua.s.get("resetIfWinStreak", 0) > 0 and self.stats.current_streak >= self.lua.s["resetIfWinStreak"]:
+                        state_update["isResetWinStreakReached"] = True
+                    if self.lua.s.get("resetIfLoseStreak", 0) > 0 and self.stats.current_streak <= -self.lua.s["resetIfLoseStreak"]:
+                        state_update["isResetLoseStreakReached"] = True
+
+                    # Check maxbet
+                    if self.lua.s.get("maxbet", 0) > 0 and self.lua.s["nextbet"] > self.lua.s["maxbet"]:
+                        state_update["isMaxBetReached"] = True
+
+                    # Update LUA state and call dobet()
+                    self.lua.update_before_bet(state_update)
                 except Exception as e:
-                    print(f"[!] Strategy error: {e}")
+                    if self.on_error:
+                        await self.on_error(f"LUA error: {e}")
                     break
 
-            if bet_info is None:
-                bet_info = self.get_next_bet(self.stats.total_bets > 0 and self._last_won if hasattr(self, '_last_won') else False)
+                # Check stop after dobet
+                if self.lua.should_stop():
+                    break
 
-            amount = bet_info.get("amount", self.config.base_bet)
-            target = bet_info.get("target", self.config.get_target())
-            over = bet_info.get("over", self.config.bet_high)
-            game_type = bet_info.get("game_type", self.config.game_type)
+                # Read bet params from LUA
+                bet_amount = self.lua.s.get("nextbet", self.config.base_bet)
+                bet_chance = self.lua.s.get("chance", self.config.target)
+                bet_bethigh = self.lua.s.get("bethigh", self.config.over)
+            else:
+                # No LUA → use config values directly
+                bet_amount = self.config.base_bet
+                bet_chance = self.config.target
+                bet_bethigh = self.config.over
 
-            self._last_amount = amount
+            # Cap maxbet
+            if self.config.max_bet > 0 and bet_amount > self.config.max_bet:
+                bet_amount = self.config.max_bet
 
-            # Place bet (dice or limbo)
+            # ── Place bet ──
             try:
-                if game_type == "limbo":
-                    result = await self.place_bet(
-                        amount=amount,
-                        target_multiplier=target,
+                if self.config.game_type == "limbo":
+                    result = await self.client.place_limbo_bet(
+                        amount=bet_amount,
+                        target_multiplier=bet_chance,
+                        currency=self.config.coin,
                     )
                 else:
-                    result = await self.place_bet(
-                        amount=amount,
-                        target=target,
-                        over=over,
+                    result = await self.client.place_dice_bet(
+                        amount=bet_amount,
+                        target=bet_chance,
+                        over=bet_bethigh,
+                        currency=self.config.coin,
                     )
+
+                if "error" in result:
+                    if self.on_error:
+                        await self.on_error(f"Bet error: {result['error']}")
+                    # Brief pause before retry
+                    await asyncio.sleep(1)
+                    continue
+
+                # Update stats
+                self.stats.add_result(result)
+
             except Exception as e:
-                print(f"[!] Bet failed: {e}")
+                if self.on_error:
+                    await self.on_error(f"Exception: {e}")
                 await asyncio.sleep(2)
                 continue
 
-            if "error" in result:
-                print(f"[!] Bet error: {result['error']}")
-                await asyncio.sleep(2)
-                continue
+            # ── Callback ──
+            if self.on_bet_placed:
+                await self.on_bet_placed(self.stats, result)
 
-            won = result.get("won", False)
-            payout = result.get("payout", 0)
-            self._last_won = won
+            # ── Handle seed rotation ──
+            if self.lua:
+                needs_rot, seed_val = self.lua.needs_seed_rotation()
+                if needs_rot:
+                    try:
+                        await self._rotate_seed(seed_val)
+                        self.lua.reset_seed_rotated()
+                    except Exception as e:
+                        if self.on_error:
+                            await self.on_error(f"Seed rotation error: {e}")
 
-            # Update stats
-            self.stats.record_bet(amount, won, payout)
+            # Small delay to prevent rate limiting
+            await asyncio.sleep(0.3)
 
-            # Update balance from result if available
-            if result.get("balance_after"):
-                self.stats.current_balance = float(result["balance_after"])
+        return self.stats
 
-            # Show result
-            icon = "🟢" if won else "🔴"
-            multiplier = result.get("multiplier", 0)
-            profit_str = f"{payout - amount:+.8f}" if won else f"{-amount:.8f}"
+    async def stop(self):
+        """Stop the betting loop."""
+        self._running = False
+        if self.lua:
+            self.lua.s["stop_requested"] = True
 
-            if game_type == "limbo":
-                crash = result.get("crash_point", 0)
-                target_m = result.get("target_multiplier", target)
-                extra = f"crash={crash:.2f}x target={target_m:.2f}x"
-            else:
-                extra = f"x{multiplier:.2f}"
+    async def _update_balance(self):
+        """Fetch current balance from Stake."""
+        balances = await self.client.get_balance_simple()
+        if isinstance(balances, dict) and "error" not in balances:
+            coin_balance = balances.get(self.config.coin, 0)
+            self.stats.current_balance = float(coin_balance)
 
-            print(f"#{self.stats.total_bets:>5} {icon} {amount:.8f} → "
-                  f"{'WON' if won else 'LOST':>4} "
-                  f"({extra}) "
-                  f"P/L: {profit_str} "
-                  f"| Balance: {self.stats.current_balance:.8f}")
+    async def _rotate_seed(self, seed_val: str):
+        """Rotate the client seed for provably fair."""
+        # Seed rotation mutation from Taraje
+        seed = seed_val if seed_val != "__auto__" else None
+        if seed is None:
+            import secrets
+            seed = secrets.token_hex(16)
 
-            # Call result callback
-            if self._on_result_fn:
-                self._on_result_fn(won, amount, payout, self.stats)
-
-            # Small delay between bets (avoid rate limits)
-            await asyncio.sleep(0.5)
-
-        # Final summary
-        self.running = False
-        self._print_summary()
-
-    def _stop_summary(self) -> str:
-        c = self.stop_conditions
-        parts = []
-        if c.max_bets > 0:
-            parts.append(f"max {c.max_bets} bets")
-        if c.target_profit > 0:
-            parts.append(f"target +{c.target_profit}")
-        if c.max_loss > 0:
-            parts.append(f"max -{c.max_loss}")
-        return ", ".join(parts) if parts else "none"
-
-    def _print_summary(self):
-        s = self.stats
-        roi = (s.net_profit / s.total_wagered * 100) if s.total_wagered > 0 else 0
-        print("\n" + "═" * 50)
-        print("📊  FINAL STATISTICS")
-        print("═" * 50)
-        print(f"  Total Bets:     {s.total_bets}")
-        print(f"  Wins:           {s.wins} ({s.win_rate:.1f}%)")
-        print(f"  Losses:         {s.losses} ({(100 - s.win_rate):.1f}%)")
-        print(f"  Total Wagered:  {s.total_wagered:.8f}")
-        print(f"  Total Payout:   {s.total_payout:.8f}")
-        print(f"  Net Profit:     {s.net_profit:+.8f}")
-        print(f"  ROI:            {roi:+.2f}%")
-        print(f"  Best Win:       {s.biggest_win:.8f}")
-        print(f"  Worst Loss:     {s.biggest_loss:.8f}")
-        print(f"  Start Balance:  {s.start_balance:.8f}")
-        print(f"  End Balance:    {s.current_balance:.8f}")
-        print("═" * 50)
-
-    def pause(self):
-        self.paused = True
-        print("⏸️  Paused")
-
-    def resume(self):
-        self.paused = False
-        print("▶️  Resumed")
-
-    def stop(self):
-        self._abort = True
-        print("⏹️  Stopping...")
-
-
-# Allow graceful shutdown with keyboard
-_engine_instance = None
-def _signal_handler(sig, frame):
-    global _engine_instance
-    print("\n\n⚠️  Interrupt received, stopping...")
-    if _engine_instance:
-        _engine_instance.stop()
-    sys.exit(0)
-
-signal.signal(signal.SIGINT, _signal_handler)
+        query = """
+        mutation RotateSeedPair($seed: String!) {
+            rotateSeedPair(seed: $seed) {
+                clientSeed {
+                    user { id name }
+                }
+            }
+        }
+        """
+        try:
+            await self.client._graphql_request(query, {"seed": seed})
+        except Exception as e:
+            raise Exception(f"Seed rotation failed: {e}")

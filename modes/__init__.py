@@ -1,1 +1,0 @@
-# stakebot modes package

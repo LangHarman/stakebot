@@ -1,1 +1,1 @@
-# stakebot core package
+"""StakeBot core - Taraje-compatible betting engine."""

@@ -1,18 +1,21 @@
--- D'Alembert Strategy
--- Increase bet by 1 unit on loss, decrease by 1 unit on win
--- More conservative than martingale
-basebet = 0.000001
-unit = 0.000001
-bethigh = false
-chance = 50
+--[[
+  D'Alembert Strategy (Taraje-compatible)
+  Up 1 unit on loss, down 1 unit on win.
+]]
+basebet = 0.00000001
+currency = "btc"
+nextbet = basebet
+
+chance = 49.5
+bethigh = true
 
 function dobet()
     if win then
-        nextbet = previousbet - unit
+        nextbet = previousbet - basebet
         if nextbet < basebet then
             nextbet = basebet
         end
     else
-        nextbet = previousbet + unit
+        nextbet = previousbet + basebet
     end
 end

@@ -1,23 +1,23 @@
--- Limbo Martingale
--- Target multiplier: 2x, double on loss, reset on win
--- Untuk game Limbo di Stake.com
+--[[
+  Limbo Martingale (Taraje-compatible)
+  Double bet on loss for Limbo, reset on win.
+  Uses mutual bet for target/multiplier.
+]]
+basebet = 0.00000001
+currency = "btc"
+nextbet = basebet
 
-target_multiplier = 2
-basebet = 0.000001
-chance = 49.5  -- Payout ~2x for Limbo
+-- target in Limbo = multiplier target (not chance)
+target = 2.0
+
+function chance_to_target(chance_val)
+    return tonumber(string.format("%.2f", (99 / chance_val)))
+end
 
 function dobet()
     if win then
         nextbet = basebet
     else
         nextbet = previousbet * 2
-    end
-
-    -- Optional: adjust target based on streak
-    if current_streak < -5 then
-        -- After 5 losses, lower target
-        target_multiplier = 1.5
-    elseif current_streak == 0 then
-        target_multiplier = 2
     end
 end

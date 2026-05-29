@@ -1,19 +1,11 @@
-# Python
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+.env
+.env.*
+~/.stakebot/
+config.json
 *.egg-info/
 dist/
 build/
-*.egg
-
-# IDE
-.vscode/
-.idea/
-
-# Config (has token)
-.stakebot/
-
-# OS
-.DS_Store
-Thumbs.db
+.eggs/

@@ -1,290 +1,343 @@
-#!/usr/bin/env python3
 """
-🎲 StakeBot CLI — Automated betting bot untuk Stake.com
-
-Fitur:
-  • Manual mode — atur base bet, chance, on-win/on-loss strategy
-  • LUA Script mode — compatible dengan Seuntjie DiceBot programmer mode
-  • Mirror support — auto fallback ke stake.mba, playstake.club, dll
-  • Cross-platform — jalan di Termux (Android), VPS Linux, STB Armbian
-
-Usage:
-  python main.py auth                    # Setup token
-  python main.py auth --mirror stake.mba # Setup token dari mirror
-  python main.py manual                  # Manual mode
-  python main.py balance                 # Cek balance
-  python main.py script martingale       # LUA script mode
+StakeBot — CLI entry point.
+Inspired by Taraje's CLI: Click-based, supports --stake.dice, --stake.limbo, --cfg etc.
 """
-import sys
-import os
 import asyncio
-import argparse
+import json
+import sys
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(__file__))
+import click
+from colorama import init, Fore, Style
 
 from core.client import (
     StakeClient, StakeConfig, StakeConfigManager,
     KNOWN_MIRRORS,
-    get_token_from_browser_instructions, test_auth,
-    test_auth_from_config,
 )
+from core.engine import BettingEngine, BetConfig, BetStats
+from core.script_engine import LuaScriptEngine
+
+init(autoreset=True)
+
+BANNER = f"""
+{Fore.CYAN}╔══════════════════════════════════════╗
+║     {Fore.YELLOW}StakeBot v2.8 — Taraje Compatible{Fore.CYAN}     ║
+║     {Fore.WHITE}Dice 🎲  |  Limbo 🚀{Fore.CYAN}               ║
+╚══════════════════════════════════════╝{Fore.RESET}
+"""
+
+BANNER_COMPACT = f"""
+{Fore.CYAN} ╭──────────────────────────────────╮
+{Fore.CYAN} │{Fore.YELLOW}  StakeBot{Fore.WHITE} - {Fore.GREEN}Taraje Compatible{Fore.CYAN}  │
+{Fore.CYAN} │{Fore.WHITE}  🎲 Dice  🚀 Limbo{Fore.CYAN}            │
+{Fore.CYAN} ╰──────────────────────────────────╯{Fore.RESET}
+"""
 
 
-# ── Mirror resolver ────────────────────────────────────
-
-def resolve_mirror(mirror_arg: str) -> dict:
-    """
-    Parse --mirror flag. Returns {mirror_mode, base_url}.
-    
-    --mirror auto      → mirror_mode=True, base_url from config or first mirror
-    --mirror stake.mba → mirror_mode=True, base_url=https://stake.mba
-    --mirror none      → mirror_mode=False, base_url=stake.com
-    --mirror            → same as auto
-    """
-    arg = (mirror_arg or "auto").strip().lower()
-
-    if arg == "none":
-        return {"mirror_mode": False, "base_url": "https://stake.com"}
-
-    if arg == "auto" or not arg:
-        # Try to load saved config, use its base_url
-        cfg = StakeConfigManager.load()
-        return {
-            "mirror_mode": True,
-            "base_url": cfg.base_url or "https://stake.com",
-        }
-
-    # User specified a domain: "stake.mba", "playstake.club", etc.
-    if not arg.startswith("http"):
-        arg = "https://" + arg
-    return {
-        "mirror_mode": True,
-        "base_url": arg.rstrip("/"),
-    }
+def load_config(ctx, param, value):
+    """Load LUA config file (like Taraje's --cfg)."""
+    if not value:
+        return None
+    path = Path(value)
+    if not path.exists():
+        click.echo(f"{Fore.RED}❌ Config file not found: {value}")
+        ctx.exit(1)
+    return path.read_text()
 
 
-def get_token(args) -> str:
-    """Get token from args, config file, or prompt."""
-    if args.token:
-        return args.token
+@click.group(invoke_without_command=True)
+@click.option("--stake.dice", "game_dice", is_flag=True, help="Play Stake Dice")
+@click.option("--stake.limbo", "game_limbo", is_flag=True, help="Play Stake Limbo")
+@click.option("--cfg", "config_file", callback=load_config,
+              type=click.Path(exists=True, readable=True),
+              help="Path to LUA config file (Taraje-compatible)")
+@click.option("--mirror", default="auto",
+              type=click.Choice(["auto", "none", *[m.replace("https://", "") for m in KNOWN_MIRRORS]]),
+              help="Mirror domain")
+@click.option("--script", "-s", type=click.Path(exists=True), help="Path to LUA betting script")
+@click.option("--api-key", "-k", help="Stake API key / access token")
+@click.option("--manual", is_flag=True, help="Manual mode with config prompts")
+@click.pass_context
+def cli(ctx, game_dice, game_limbo, config_file, mirror, script, api_key, manual):
+    """StakeBot — CLI betting bot for Stake.com (Dice & Limbo)."""
+    ctx.ensure_object(dict)
+
+    # Taraje-compatible: --stake.dice or --stake.limbo triggers betting
+    game_type = "dice" if game_dice else ("limbo" if game_limbo else None)
+
+    # Store in context
+    ctx.obj["game_type"] = game_type
+    ctx.obj["config_file"] = config_file
+    ctx.obj["mirror"] = mirror
+    ctx.obj["script"] = script
+    ctx.obj["api_key"] = api_key
+    ctx.obj["manual"] = manual
+
+    # Track if a command was invoked
+    ctx.obj["command_invoked"] = ctx.invoked_subcommand is not None
+
+
+@cli.command()
+def auth():
+    """🔑 Authenticate: save access token."""
+    token = click.prompt("x-access-token", hide_input=True)
+    cfg = StakeConfig(access_token=token)
+    StakeConfigManager.save(cfg)
+    click.echo(f"{Fore.GREEN}✅ Token saved to {cfg.config_path}")
+
+
+@cli.command()
+@click.pass_context
+def balance(ctx):
+    """💰 Show balance in IDR."""
+    asyncio.run(_cmd_balance(ctx.obj["mirror"]))
+
+
+async def _cmd_balance(mirror: str):
     cfg = StakeConfigManager.load()
-    if cfg.access_token:
-        return cfg.access_token
-
-    print("\n🔑 Enter your Stake.com access token:")
-    token = input("  Token: ").strip()
-    if token:
-        cfg.access_token = token
-        StakeConfigManager.save(cfg)
-        print("✅ Token saved to ~/.stakebot/config.json")
-    return token
-
-
-def build_config(token: str, mirror_info: dict) -> StakeConfig:
-    """Build StakeConfig from token + mirror info."""
-    cfg = StakeConfigManager.load()
-    cfg.access_token = token or cfg.access_token
-    cfg.mirror_mode = mirror_info.get("mirror_mode", False)
-    cfg.base_url = mirror_info.get("base_url", cfg.base_url)
-    return cfg
-
-
-# ── Commands ───────────────────────────────────────────
-
-async def cmd_auth(args, mirror_info: dict):
-    print(get_token_from_browser_instructions())
-    token = input("\n  Paste token to test (or Enter to skip): ").strip()
-    if not token:
+    if not cfg.access_token:
+        click.echo(f"{Fore.RED}❌ No token. Run: stakebot auth")
         return
 
-    cfg = build_config(token, mirror_info)
+    if mirror and mirror != "auto" and mirror != "none":
+        cfg.base_url = f"https://{mirror}"
+        cfg.mirror_mode = True
+    elif mirror == "auto":
+        cfg.mirror_mode = True
 
-    print(f"  Testing with domain: {cfg.base_url}")
-    if cfg.mirror_mode:
-        print(f"  Mirror fallback enabled (auto fallback to mirrors)")
-
-    ok = await test_auth_from_config(cfg)
-    if ok:
-        print(f"\n✅ Token valid! Domain: {cfg.base_url}")
-        StakeConfigManager.save(cfg)
-    else:
-        print(f"\n❌ Auth failed on {cfg.base_url}")
-        if not cfg.mirror_mode:
-            print("   Coba lagi pake --mirror auto kalo pake mirror domain:")
-            print("   python main.py auth --mirror auto")
-        else:
-            print("   Token mungkin expired. Ulangi dari Kiwi Browser.")
-        # Still save so user can retry later
-        StakeConfigManager.save(cfg)
-        print("   Token tetap disimpan. Coba: python main.py balance")
-
-
-async def cmd_balance(args, mirror_info: dict):
-    token = get_token(args)
-    if not token:
-        print("❌ No token. Run: python main.py auth")
-        return
-
-    cfg = build_config(token, mirror_info)
+    click.echo(BANNER_COMPACT)
     async with StakeClient(cfg) as client:
-        user_info = await client.get_user_info()
-        if not user_info:
-            print("❌ Auth failed! Token invalid/expired atau domain salah.")
-            print(f"   Domain: {cfg.base_url}")
-            print("   Coba: python main.py auth --mirror auto")
+        # Get user info
+        user = await client.get_user_info()
+        if user:
+            click.echo(f"{Fore.GREEN}👤 {user['name']}  "
+                       f"{Fore.YELLOW}Level {user['level']}  "
+                       f"{Fore.CYAN}KYC Tier {user['kyc']}")
+        else:
+            click.echo(f"{Fore.RED}❌ Auth failed — token invalid")
             return
-        print(f"✅ Welcome, {user_info['name']}!")
-        print(f"   Level: {user_info['level']}  |  KYC: Tier {user_info['kyc']}")
-        print()
 
-        # Show ALL balances
-        print("💰  BALANCES")
+        # Get balance
+        click.echo(f"{Fore.WHITE}💰 Balance:")
         idr_str = await client.get_balance_idr()
-        print(idr_str)
+        click.echo(f"{Fore.CYAN}{idr_str}")
 
 
-async def cmd_manual(args, mirror_info: dict):
-    from modes.manual import run_manual
-    token = get_token(args)
-    if not token:
-        print("❌ No token. Run: python main.py auth")
+@cli.command()
+@click.pass_context
+def info(ctx):
+    """ℹ️  Show account info (username, level, KYC)."""
+    asyncio.run(_cmd_info(ctx.obj["mirror"]))
+
+
+async def _cmd_info(mirror: str):
+    cfg = StakeConfigManager.load()
+    if not cfg.access_token:
+        click.echo(f"{Fore.RED}❌ No token. Run: stakebot auth")
         return
-    cfg = build_config(token, mirror_info)
-    await run_manual(cfg)
+
+    if mirror and mirror != "auto" and mirror != "none":
+        cfg.base_url = f"https://{mirror}"
+        cfg.mirror_mode = True
+    elif mirror == "auto":
+        cfg.mirror_mode = True
+
+    async with StakeClient(cfg) as client:
+        user = await client.get_user_info()
+        if user:
+            click.echo(f"{Fore.GREEN}👤 Username: {user['name']}")
+            click.echo(f"{Fore.YELLOW}📊 Level: {user['level']}")
+            click.echo(f"{Fore.CYAN}🛡️  KYC Tier: {user['kyc']}")
+
+            balances = await client.get_balance_simple()
+            if "error" not in balances:
+                click.echo(f"{Fore.WHITE}💰 Balances:")
+                for coin, amt in sorted(balances.items(), key=lambda x: -x[1]):
+                    if amt > 0:
+                        click.echo(f"  {Fore.CYAN}{coin.upper()}: {amt:.8f}")
+        else:
+            click.echo(f"{Fore.RED}❌ Auth failed")
 
 
-async def cmd_script(args, mirror_info: dict):
-    from modes.script import run_script, get_script_path
-    token = get_token(args)
-    if not token:
-        print("❌ No token. Run: python main.py auth")
+@cli.command()
+@click.option("--coin", "-c", default="btc", help="Coin to use")
+@click.option("--script", "-s", type=click.Path(exists=True), help="LUA betting script")
+@click.option("--base-bet", "-b", type=float, default=0.00000001, help="Base bet amount")
+@click.option("--chance", type=float, help="Target chance (dice) or multiplier (limbo)")
+@click.option("--high", is_flag=True, help="Bet high (dice only)")
+@click.option("--max-bets", "-n", type=int, default=0, help="Max number of bets")
+@click.option("--target-profit", type=float, help="Stop when profit >= this")
+@click.option("--target-loss", type=float, help="Stop when loss >= this")
+@click.pass_context
+def dice(ctx, coin, script, base_bet, chance, high, max_bets, target_profit, target_loss):
+    """🎲 Play Stake Dice."""
+    asyncio.run(_cmd_game(
+        mirror=ctx.obj["mirror"],
+        game_type="dice",
+        coin=coin.lower(),
+        script=script,
+        base_bet=base_bet,
+        chance=chance or 49.5,
+        over=high,
+        max_bets=max_bets,
+        target_profit=target_profit,
+        target_loss=target_loss,
+    ))
+
+
+@cli.command()
+@click.option("--coin", "-c", default="btc", help="Coin to use")
+@click.option("--script", "-s", type=click.Path(exists=True), help="LUA betting script")
+@click.option("--base-bet", "-b", type=float, default=0.00000001, help="Base bet amount")
+@click.option("--multiplier", type=float, default=2.0, help="Target multiplier")
+@click.option("--max-bets", "-n", type=int, default=0, help="Max number of bets")
+@click.option("--target-profit", type=float, help="Stop when profit >= this")
+@click.option("--target-loss", type=float, help="Stop when loss >= this")
+@click.pass_context
+def limbo(ctx, coin, script, base_bet, multiplier, max_bets, target_profit, target_loss):
+    """🚀 Play Stake Limbo."""
+    asyncio.run(_cmd_game(
+        mirror=ctx.obj["mirror"],
+        game_type="limbo",
+        coin=coin.lower(),
+        script=script,
+        base_bet=base_bet,
+        chance=multiplier,
+        over=True,
+        max_bets=max_bets,
+        target_profit=target_profit,
+        target_loss=target_loss,
+    ))
+
+
+async def _cmd_game(mirror, game_type, coin, script, base_bet, chance, over,
+                    max_bets, target_profit, target_loss):
+    """Run a betting game."""
+    cfg = StakeConfigManager.load()
+    if not cfg.access_token:
+        click.echo(f"{Fore.RED}❌ No token. Run: stakebot auth")
         return
-    cfg = build_config(token, mirror_info)
-    script = args.script or "custom"
-    max_bets = args.max_bets or 0
-    await run_script(cfg, script, max_bets=max_bets)
 
+    if mirror and mirror != "auto" and mirror != "none":
+        cfg.base_url = f"https://{mirror}"
+        cfg.mirror_mode = True
+    elif mirror == "auto":
+        cfg.mirror_mode = True
 
-def cmd_scripts(args):
-    from modes.script import EXAMPLE_SCRIPTS
-    base = os.path.dirname(__file__)
-    scripts_dir = os.path.join(base, "scripts")
+    # Load LUA script if provided
+    lua_engine = None
+    if script:
+        try:
+            script_content = Path(script).read_text()
+            lua_engine = LuaScriptEngine(script_content)
+            click.echo(f"{Fore.GREEN}📜 LUA script loaded: {script}")
+        except Exception as e:
+            click.echo(f"{Fore.RED}❌ LUA load error: {e}")
+            return
 
-    print("\n📜  AVAILABLE SCRIPTS")
-    print("=" * 50)
-    print()
-
-    print("Built-in templates:")
-    for name in EXAMPLE_SCRIPTS:
-        desc = {
-            "martingale": "Double on loss, reset on win (Dice)",
-            "reverse_martingale": "Double on win, reset on loss (Dice)",
-            "dalembert": "+1 unit on loss, -1 unit on win (Dice)",
-            "oscars_grind": "Grind for profits (Dice)",
-            "limbo": "Multiplier target (Limbo)",
-            "custom": "Empty template",
-        }.get(name, "")
-        print(f"  {name:20s} — {desc}")
-
-    if os.path.isdir(scripts_dir):
-        files = sorted(f for f in os.listdir(scripts_dir) if f.endswith(".lua"))
-        if files:
-            print(f"\n  Script files ({scripts_dir}/):")
-            for f in files:
-                fpath = os.path.join(scripts_dir, f)
-                print(f"    {f:30s} ({os.path.getsize(fpath)} bytes)")
-
-    print()
-    print("Usage:")
-    print("  python main.py script martingale")
-    print("  python main.py script oscars_grind --max-bets 100")
-
-
-async def cmd_gen_script(args):
-    from modes.script import EXAMPLE_SCRIPTS
-    name = args.name or "custom"
-    out_path = args.output or f"scripts/{name}.lua"
-    if name not in EXAMPLE_SCRIPTS:
-        print(f"❌ Unknown: {name}")
-        return
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    with open(out_path, "w") as f:
-        f.write(EXAMPLE_SCRIPTS[name])
-    print(f"✅ Generated {os.path.basename(out_path)}")
-    print(f"   python main.py script {out_path}")
-
-
-# ── Main ───────────────────────────────────────────────
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="🎲 StakeBot — CLI betting bot untuk Stake.com",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python main.py auth                      # Setup token
-  python main.py auth --mirror stake.mba   # Token dari mirror
-  python main.py balance                   # Cek balance
-  python main.py balance --mirror auto     # Cek balance via mirror
-  python main.py manual                    # Manual mode
-  python main.py script martingale         # LUA script mode
-  python main.py script limbo_martingale   # Limbo LUA script
-        """
+    # Bet config
+    bet_config = BetConfig(
+        game_type=game_type,
+        coin=coin,
+        base_bet=base_bet,
+        target=chance,
+        over=over,
+        max_bets=max_bets,
+        target_profit=target_profit or 0,
+        target_loss=target_loss or 0,
     )
-    parser.add_argument("--token", "-t", help="Access token")
-    parser.add_argument("--mirror", "-m", default="auto",
-                        help='Mirror: "auto", "stake.mba", "playstake.club", "none"')
 
-    sub = parser.add_subparsers(dest="command")
+    click.echo(BANNER)
+    game_emoji = "🎲" if game_type == "dice" else "🚀"
+    click.echo(f"{Fore.WHITE}{game_emoji} Playing Stake {game_type.upper()}  "
+               f"|  Coin: {Fore.YELLOW}{coin.upper()}  "
+               f"|  Base: {Fore.CYAN}{base_bet:.8f}")
+    click.echo("")
 
-    sub.add_parser("auth", help="Setup access token")
-    sub.add_parser("balance", help="Check balance")
-    sub.add_parser("manual", help="Manual betting mode")
+    async with StakeClient(cfg) as client:
+        # Verify auth
+        user = await client.get_user_info()
+        if not user:
+            click.echo(f"{Fore.RED}❌ Auth failed — token invalid")
+            return
+        click.echo(f"{Fore.GREEN}👤 Logged in as: {user['name']}  "
+                   f"Level {user['level']}  KYC Tier {user['kyc']}")
 
-    sp = sub.add_parser("script", help="LUA script mode")
-    sp.add_argument("script", nargs="?", default="custom",
-                    help="Script name or path (default: custom)")
-    sp.add_argument("--max-bets", type=int, default=0,
-                    help="Stop after N bets (0 = unlimited)")
+        # Show initial balance
+        idr_balance = await client.get_balance_idr()
+        click.echo(f"💰 Balance ({coin.upper()}):")
+        click.echo(f"  {Fore.CYAN}{idr_balance}")
 
-    sub.add_parser("scripts", help="List available scripts")
+        balances = await client.get_balance_simple()
+        coin_balance = balances.get(coin, 0)
+        if coin_balance <= 0:
+            click.echo(f"{Fore.RED}⚠️  {coin.upper()} balance is 0. "
+                       f"Deposit first or choose a different coin."
+                       f"\n  Available coins with balance:")
+            for c, a in sorted(balances.items(), key=lambda x: -x[1]):
+                if a > 0:
+                    click.echo(f"  {Fore.YELLOW}{c.upper()}: {Fore.WHITE}{a:.8f}")
+            return
 
-    gs = sub.add_parser("gen-script", help="Generate example script")
-    gs.add_argument("name", nargs="?", default="custom")
-    gs.add_argument("--output", "-o", default="")
+        # Setup the engine
+        async def on_bet(stats, result):
+            outcome_icon = f"{Fore.GREEN}✅ WIN" if result.get("won") else f"{Fore.RED}❌ LOSE"
+            if game_type == "limbo":
+                crash = result.get("crash_point", 0)
+                target_m = result.get("target_multiplier", chance)
+                click.echo(
+                    f"\r{stats.short_line()}  "
+                    f"{outcome_icon}  "
+                    f"🎯 {target_m:.2f}x  "
+                    f"💥 {crash:.2f}x",
+                    nl=False
+                )
+            else:
+                outcome_num = result.get("outcome", "?")
+                click.echo(
+                    f"\r{stats.short_line()}  "
+                    f"{outcome_icon}  "
+                    f"🎯 {chance}  "
+                    f"🎲 {outcome_num}",
+                    nl=False
+                )
 
-    args = parser.parse_args()
+        async def on_error(msg):
+            click.echo(f"\n{Fore.RED}{msg}")
 
-    # Resolve mirror
-    mirror_info = resolve_mirror(args.mirror)
-    if mirror_info["mirror_mode"]:
-        print(f"🪞 Mirror: {mirror_info['base_url']}")
-    print()
+        engine = BettingEngine(
+            client=client,
+            config=bet_config,
+            lua_engine=lua_engine,
+            on_bet_placed=on_bet,
+            on_error=on_error,
+        )
 
-    if not args.command:
-        parser.print_help()
-        return
+        # Run!
+        try:
+            click.echo(f"\n{Fore.YELLOW}▶️  Starting... (Ctrl+C to stop)\n")
+            final_stats = await engine.run()
+        except KeyboardInterrupt:
+            click.echo(f"\n\n{Fore.YELLOW}⏹️  Stopped by user")
+            engine._running = False
+            final_stats = engine.stats
 
-    # Dispatch
-    cmds = {
-        "auth": cmd_auth,
-        "balance": cmd_balance,
-        "manual": cmd_manual,
-        "script": cmd_script,
-        "scripts": cmd_scripts,
-        "gen-script": cmd_gen_script,
-    }
+        # Print final stats
+        click.echo(f"\n\n{Fore.CYAN}═══════════════ FINAL STATS ═══════════════")
+        click.echo(final_stats.summary())
 
-    cmd = cmds.get(args.command)
-    if not cmd:
-        parser.print_help()
-        return
+        # Show IDR value
+        idr_balance = await client.get_balance_idr()
+        click.echo(f"💰 Balance now:\n{Fore.CYAN}{idr_balance}")
 
-    if asyncio.iscoroutinefunction(cmd):
-        asyncio.run(cmd(args, mirror_info))
-    else:
-        cmd(args)
+
+# ── Main entry point ──
+def main():
+    """Entry point for the stakebot CLI."""
+    if len(sys.argv) == 1:
+        # No args → show help
+        sys.argv.append("--help")
+    cli(obj={})
 
 
 if __name__ == "__main__":

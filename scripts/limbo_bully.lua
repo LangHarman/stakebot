@@ -1,23 +1,32 @@
--- Limbo Bully Strategy
--- Target multiplier rendah (1.1x - 1.5x) untuk win rate tinggi
--- Increase bet gradually on loss, reset on win
+--[[
+  Limbo Bully Strategy (Taraje-compatible)
+  Aggressive Limbo: bet high multiplier, skip until first loss then bully.
+]]
+basebet = 0.00000001
+currency = "btc"
+nextbet = basebet
 
-target_multiplier = 1.2
-basebet = 0.000001
-chance = 80.0  -- ~80% chance to win at 1.2x
+-- High multiplier target
+target = 10.0
+
+-- Bully level (increase after loss)
+bullyLevel = 1
 
 function dobet()
     if win then
+        -- Reset on win
         nextbet = basebet
+        bullyLevel = 1
     else
-        -- Increase by 50% on loss
-        nextbet = previousbet * 1.5
+        -- Bully up on loss
+        bullyLevel = bullyLevel + 1
+        nextbet = basebet * bullyLevel
     end
 
-    -- Safety: don't let bet get too big
-    if nextbet > basebet * 100 then
-        stop()
+    -- Increase target multiplier if we're bullying
+    if bullyLevel > 1 then
+        target = 5.0  -- Lower target = higher chance to win
+    else
+        target = 10.0 -- Normal target = lower chance, higher payout
     end
-
-    print("Balance: " .. balance .. " | Crash: " .. crash)
 end
