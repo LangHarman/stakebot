@@ -98,33 +98,25 @@ class LuaScriptEngine:
         if self._lua is None:
             return
         try:
-            fn = self._lua.globals().get(name)
-            if fn is None:
-                # function not defined in script — fine, user may not have it
-                return
+            fn = self._lua.globals()[name]
+        except KeyError:
+            return  # function not defined — fine
+        try:
             if not callable(fn):
                 print(f"⚠️  LUA [{name}]: is not a function (type={type(fn).__name__})")
                 return
             fn()
         except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            # only show first meaningful frame
-            for line in tb.split('\n'):
-                if name in line or 'LuaRuntime' in line:
-                    print(f"⚠️  LUA [{name}]: {line.strip()}")
-                    break
-            else:
-                print(f"⚠️  LUA [{name}]: {e}")
+            print(f"⚠️  LUA [{name}]: {e}")
 
     def get(self, key: str, default=None):
         """Get a LUA global variable."""
         if self._lua is None:
             return default
         try:
-            v = self._lua.globals().get(key)
+            v = self._lua.globals()[key]
             return v if v is not None else default
-        except Exception:
+        except (KeyError, Exception):
             return default
 
     def set(self, key: str, value):

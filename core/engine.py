@@ -260,7 +260,7 @@ class BettingEngine:
         l.set("isMaxBetReached", False)
         l.set("isBetInterrupted", False)
         l.set("maxbet", 0)
-        l.set("stop", False)
+        l.set("stopBetting", False)
         # Run user's init code (e.g., chance = 49.5)
         l.call("init")
         l.stopped = False
