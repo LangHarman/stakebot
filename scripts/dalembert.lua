@@ -1,20 +1,9 @@
---[[
-  D'Alembert Strategy (Taraje-compatible)
-  Up 1 unit on loss, down 1 unit on win.
-]]
-basebet = 0.00000001
-currency = "btc"
-nextbet = basebet
-
-chance = 49.5
-bethigh = true
+-- D'Alembert Strategy
+-- Increase by 1 unit after loss, decrease by 1 after win
 
 function dobet()
     if win then
-        nextbet = previousbet - basebet
-        if nextbet < basebet then
-            nextbet = basebet
-        end
+        nextbet = math.max(basebet, previousbet - basebet)
     else
         nextbet = previousbet + basebet
     end

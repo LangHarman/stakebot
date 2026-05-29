@@ -1,13 +1,5 @@
---[[
-  Reverse Martingale (Taraje-compatible)
-  Double bet on win, reset on loss.
-]]
-basebet = 0.00000001
-currency = "btc"
-nextbet = basebet
-
-chance = 49.5
-bethigh = true
+-- Reverse Martingale Strategy
+-- Double bet after win, reset after loss
 
 function dobet()
     if win then

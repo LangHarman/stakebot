@@ -1,34 +1,24 @@
---[[
-  Fibonacci Strategy (Taraje-compatible)
-  Uses Fibonacci sequence for bet sizing.
-  On loss: advance 1 step in sequence
-  On win: retreat 2 steps
-]]
-basebet = 0.00000001
-currency = "btc"
-nextbet = basebet
+-- Fibonacci Strategy
+-- Use Fibonacci sequence: bet[n] = bet[n-1] + bet[n-2] after loss
+-- Step back 2 positions after win
 
-chance = 49.5
-bethigh = true
-
--- Fibonacci sequence
-fib = {1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610}
-fibIndex = 1
+fib = {1, 1}
+fib_pos = 0
 
 function dobet()
+    if fib_pos == 0 then
+        fib_pos = 1
+    end
+
+    if fib_pos > #fib then
+        fib[fib_pos] = fib[fib_pos-1] + fib[fib_pos-2]
+    end
+
+    nextbet = basebet * fib[fib_pos]
+
     if win then
-        -- Retreat 2 steps
-        fibIndex = fibIndex - 2
-        if fibIndex < 1 then
-            fibIndex = 1
-        end
-        nextbet = basebet * fib[fibIndex]
+        fib_pos = math.max(0, fib_pos - 2)
     else
-        -- Advance 1 step
-        fibIndex = fibIndex + 1
-        if fibIndex > #fib then
-            fibIndex = #fib
-        end
-        nextbet = basebet * fib[fibIndex]
+        fib_pos = fib_pos + 1
     end
 end

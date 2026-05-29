@@ -1,38 +1,20 @@
---[[
-  Oscar's Grind (Taraje-compatible)
-  After a win, increase bet by 1 unit. After loss, keep same bet.
-  Stop session when profit reaches 1 unit.
-]]
-basebet = 0.00000001
-currency = "btc"
-nextbet = basebet
+-- Oscar's Grind Strategy
+-- Increment by 1 unit after win (until profit), never change after loss
 
-chance = 49.5
-bethigh = true
-targetProfit = basebet * 5
-
-sessionUnits = 1
-inSession = false
+oscars_next = 0
 
 function dobet()
-    if profit >= targetProfit then
-        stop()
-        return
+    if oscars_next == 0 then
+        oscars_next = basebet
     end
 
+    nextbet = oscars_next
+
     if win then
-        if not inSession then
-            inSession = true
-            sessionUnits = 1
-        end
-        sessionUnits = sessionUnits + 1
-        nextbet = basebet * sessionUnits
-    else
-        -- On loss, keep same bet (Oscar's Grind rule)
-        if not inSession then
-            nextbet = basebet
+        if profit + nextbet > 0 then
+            oscars_next = basebet
         else
-            nextbet = basebet * sessionUnits
+            oscars_next = math.min(basebet + nextbet, basebet * 10)
         end
     end
 end
