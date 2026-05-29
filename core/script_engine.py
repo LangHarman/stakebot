@@ -101,10 +101,11 @@ class LuaScriptEngine:
             fn = self._lua.globals()[name]
         except KeyError:
             return  # function not defined — fine
+        if fn is None:
+            return  # lupa returns None for nonexistent keys too
         try:
             if not callable(fn):
-                print(f"⚠️  LUA [{name}]: is not a function (type={type(fn).__name__})")
-                return
+                return  # skip silently
             fn()
         except Exception as e:
             print(f"⚠️  LUA [{name}]: {e}")

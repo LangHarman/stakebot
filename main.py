@@ -432,11 +432,8 @@ async def _run_live(cfg: StakeConfig, bc: BetConfig, lua,
             won = result.get("won", False)
             payout = result.get("payout", 0)
             amount = cbet[0]
-            if bc.coin in client.balance:
-                stats.current_balance = client.balance[bc.coin]
-            else:
-                stats.current_balance += (payout - amount) if won else -amount
-
+            # Always track manually — client.balance is stale between bets
+            stats.current_balance += (payout - amount) if won else -amount
             pnl = (payout - amount) if won else -amount
 
             display.update(bet_id=stats.bets, won=won, amount=amount,
