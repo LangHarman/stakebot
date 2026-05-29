@@ -6,7 +6,6 @@ StakeBot CLI v{VERSION} — Professional Taraje-Compatible Betting Bot
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 import time
 import textwrap
@@ -34,7 +33,7 @@ def _c(code: str, text="") -> str:
     return f"\033[{colors.get(code,'0')}m{text}\033[0m"
 
 def _cls():
-    os.system("clear 2>/dev/null || printf '\\033c'")
+    click.echo("\033[H\033[2J\033[3J", nl=False)
 
 def _banner():
     click.echo(f"\n{_c('bold')}  🎲 StakeBot v{VERSION}{_c('reset')}")
@@ -67,36 +66,44 @@ def _read_multiline(prompt: str = "  > ") -> str:
 #  SPLASH SCREEN
 # ═════════════════════════════════════════════
 
-SPLASH = """{c}
-╔══════════════════════════════════════════╗
-║                                          ║
-║  {y}▗▄▄▖ ▗▄▖▗▄▄▄▖▗▄▖ ▗▖ ▗▖▗▄▄▄▖ ▗▄▖ ▗▖ ▗▖{c}   ║
-║  {y}▐▌ ▐▌▐▌ ▐▌ █ ▐▌ ▐▌▐▌ ▐▌ █ ▐▌ ▐▌▐▛▚▖▐▌{c}   ║
-║  {y}▐▛▀▚▖▐▛▀▜▌ █ ▐▛▀▜▌▐▌ ▐▌ █ ▐▛▀▜▌▐▌ ▝▜▌{c}   ║
-║ {y}▐▙▄▞▘▐▌ ▐▌ █ ▐▌ ▐▌ ▝▚▞▘ ▗▄█▄▖▐▌ ▐▌▐▌ ▐▌{c}  ║
-║                                          ║
-║          {y}▗▖ ▗▄▖ ▗▖ ▗▖▗▄▄▄▖▗▄▄▖{c}           ║
-║           {y}▐▌▐▌ ▐▌▐▌▗▞▘▐▌ ▐▌ ▐▌{c}           ║
-║          {y}▐▌▐▛▀▜▌▐▛▚▖ ▐▛▀▀▘▐▛▀▚▖{c}          ║
-║        {y}▗▄▄▞▘▐▌ ▐▌▐▌ ▐▌▐▙▄▄▖▐▌ ▐▌{c}         ║
-║                                          ║
-║       {m}Winner know when to stop!{c}         ║
-║                                          ║
-║       {g}Stake Bot v{VERSION}{c}                       ║
-║       {d}Made by Melky & Batavian Jaker{c}       ║
-║                                          ║
-║       {d}2026{c}                                 ║
-║                                          ║
-╚══════════════════════════════════════════╝
-   {d}Connecting...{R}
+SPLASH = """
+
+
+  {y}▗▄▄▖ ▗▄▖▗▄▄▄▖▗▄▖ ▗▖ ▗▖▗▄▄▄▖ ▗▄▖ ▗▖ ▗▖{R}
+  {y}▐▌ ▐▌▐▌ ▐▌ █ ▐▌ ▐▌▐▌ ▐▌ █ ▐▌ ▐▌▐▛▚▖▐▌{R}
+  {y}▐▛▀▚▖▐▛▀▜▌ █ ▐▛▀▜▌▐▌ ▐▌ █ ▐▛▀▜▌▐▌ ▝▜▌{R}
+  {y}▐▙▄▞▘▐▌ ▐▌ █ ▐▌ ▐▌ ▝▚▞▘ ▗▄█▄▖▐▌ ▐▌▐▌ ▐▌{R}
+
+
+
+
+          {y}▗▖ ▗▄▖ ▗▖ ▗▖▗▄▄▄▖▗▄▄▖{R}
+           {y}▐▌▐▌ ▐▌▐▌▗▞▘▐▌ ▐▌ ▐▌{R}
+          {y}▐▌▐▛▀▜▌▐▛▚▖ ▐▛▀▀▘▐▛▀▚▖{R}
+        {y}▗▄▄▞▘▐▌ ▐▌▐▌ ▐▌▐▙▄▄▖▐▌ ▐▌{R}
+
+
+
+{m}       Winner know when to stop!{R}
+
+{g}        Stake Bot v{VERSION}{R}
+{d}   Made by Melky & Batavian Jaker{R}
+
+{d}             2026{R}
+
+
+       {d}Connecting...{R}
 """
 
 def _splash():
+    """Display splash screen for 2.5 seconds."""
     _cls()
     txt = (SPLASH
-           .replace("{c}", _c("cyan")).replace("{y}", _c("yellow"))
-           .replace("{m}", _c("magenta")).replace("{g}", _c("green"))
-           .replace("{d}", _c("dim")).replace("{R}", _c("reset"))
+           .replace("{y}", _c("yellow"))
+           .replace("{m}", _c("magenta"))
+           .replace("{g}", _c("green"))
+           .replace("{d}", _c("dim"))
+           .replace("{R}", _c("reset"))
            .replace("{VERSION}", VERSION))
     click.echo(txt)
     time.sleep(2.5)
