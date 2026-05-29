@@ -4,6 +4,7 @@ Handles auth, mirror domains, GraphQL betting, and session management.
 """
 import json
 import asyncio
+import uuid
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
@@ -321,11 +322,20 @@ class StakeClient:
 
     # ── Dice ────────────────────────────────────────────────
 
-    async def place_dice_bet(self, amount: float, target: float, over: bool) -> dict:
-        """Place a Dice bet."""
+    async def place_dice_bet(self, amount: float, target: float, over: bool,
+                              currency: str = "btc") -> dict:
+        """Place a Dice bet using Stake's API format."""
+        identifier = str(uuid.uuid4())
+        condition = "above" if over else "below"
         query = """
-        mutation DicePlay($amount: Float!, $target: Float!, $over: Boolean!) {
-            dicePlay(input: { amount: $amount, target: $target, over: $over }) {
+        mutation DiceRoll($amount: Float!, $target: Float!, $condition: CasinoGameDiceConditionEnum!, $currency: CurrencyEnum!, $identifier: String!) {
+            diceRoll(
+                amount: $amount
+                target: $target
+                condition: $condition
+                currency: $currency
+                identifier: $identifier
+            ) {
                 id amount payout multiplier outcome
                 user { balance }
             }
@@ -333,9 +343,13 @@ class StakeClient:
         """
         try:
             data = await self._graphql_request(query, {
-                "amount": amount, "target": target, "over": over
+                "amount": amount,
+                "target": target,
+                "condition": condition,
+                "currency": currency.upper(),
+                "identifier": identifier,
             })
-            r = data.get("dicePlay", {})
+            r = data.get("diceRoll", {})
             return {
                 "id": r.get("id", ""),
                 "amount": float(r.get("amount", 0)),
@@ -344,29 +358,39 @@ class StakeClient:
                 "outcome": r.get("outcome", ""),
                 "won": r.get("outcome") == "win",
                 "balance_after": r.get("user", {}).get("balance"),
-                "currency": "btc",
+                "currency": currency,
             }
         except Exception as e:
             return {"error": str(e)}
 
     # ── Limbo ───────────────────────────────────────────────
 
-    async def place_limbo_bet(self, amount: float, target_multiplier: float) -> dict:
-        """Place a Limbo bet."""
+    async def place_limbo_bet(self, amount: float, target_multiplier: float,
+                               currency: str = "btc") -> dict:
+        """Place a Limbo bet using Stake's API format."""
+        identifier = str(uuid.uuid4())
         query = """
-        mutation LimboPlay($amount: Float!, $targetMultiplier: Float!) {
-            limboPlay(input: { amount: $amount, targetMultiplier: $targetMultiplier }) {
+        mutation LimboBet($amount: Float!, $multiplierTarget: Float!, $currency: CurrencyEnum!, $identifier: String!) {
+            limboBet(
+                amount: $amount
+                multiplierTarget: $multiplierTarget
+                currency: $currency
+                identifier: $identifier
+            ) {
                 id amount payout multiplier outcome
-                crashMultiplier targetMultiplier
+                crashMultiplier multiplierTarget
                 user { balance }
             }
         }
         """
         try:
             data = await self._graphql_request(query, {
-                "amount": amount, "targetMultiplier": target_multiplier
+                "amount": amount,
+                "multiplierTarget": target_multiplier,
+                "currency": currency.upper(),
+                "identifier": identifier,
             })
-            r = data.get("limboPlay", {})
+            r = data.get("limboBet", {})
             return {
                 "id": r.get("id", ""),
                 "amount": float(r.get("amount", 0)),
@@ -376,8 +400,8 @@ class StakeClient:
                 "won": r.get("outcome") == "win",
                 "balance_after": r.get("user", {}).get("balance"),
                 "crash_point": float(r.get("crashMultiplier", 0)),
-                "target_multiplier": float(r.get("targetMultiplier", 0)),
-                "currency": "btc",
+                "target_multiplier": float(r.get("multiplierTarget", 0)),
+                "currency": currency,
             }
         except Exception as e:
             return {"error": str(e)}

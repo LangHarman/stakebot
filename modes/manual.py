@@ -221,12 +221,14 @@ async def run_manual(cfg):
         if bet_cfg.game_type == "limbo":
             async def place_fn(amount, target_multiplier=None, **kw):
                 return await client.place_limbo_bet(
-                    amount=amount, target_multiplier=target_multiplier
+                    amount=amount, target_multiplier=target_multiplier,
+                    currency=coin
                 )
         else:
             async def place_fn(amount, target=None, over=None, **kw):
                 return await client.place_dice_bet(
-                    amount=amount, target=target, over=over
+                    amount=amount, target=target, over=over,
+                    currency=coin
                 )
 
         engine = BettingEngine(
