@@ -37,19 +37,28 @@ SCRIPT_DIR = Path(__file__).parent / "scripts"
 
 # ── Helpers ──
 
-def load_config_with_logging(path: Path) -> StakeConfig:
+def load_config_with_logging(path: Path, mirror_opt: str = "auto") -> StakeConfig:
     """Load config, print helpful message if missing."""
     cfg = StakeConfigManager.load()
     if not cfg.access_token:
         click.echo(f"\n{Fore.YELLOW}⚠️  Belum ada token! Jalankan dulu:{Fore.RESET}")
-        click.echo(f"  {Fore.WHITE}python main.py auth{Fore.RESET}")
+        click.echo(f"  {Fore.WHITE}python main.py auth --force{Fore.RESET}")
         click.echo(f"\n{Fore.CYAN}Cara dapetin token:{Fore.RESET}")
-        click.echo(f"  1. Buka Stake.com di {Fore.YELLOW}Kiwi Browser{Fore.RESET}")
+        click.echo(f"  1. Buka salah satu mirror di {Fore.YELLOW}Kiwi Browser{Fore.RESET}:")
+        click.echo(f"     {Fore.GREEN}stake.mba{Fore.RESET} atau mirror lain yang bisa dibuka")
         click.echo(f"  2. Login, pencet {Fore.YELLOW}3 titik → Developer Tools{Fore.RESET}")
         click.echo(f"  3. Tab {Fore.YELLOW}Network{Fore.RESET}, filter: {Fore.GREEN}graphql{Fore.RESET}")
         click.echo(f"  4. Klik request /_api/graphql, cari {Fore.YELLOW}x-access-token{Fore.RESET} di headers")
         click.echo(f"  5. Copy value-nya, paste ke sini:\n")
         return None
+
+    # Apply mirror settings
+    if mirror_opt and mirror_opt != "auto" and mirror_opt != "none":
+        cfg.base_url = f"https://{mirror_opt}"
+        cfg.mirror_mode = False
+    elif mirror_opt == "auto":
+        cfg.mirror_mode = True
+
     return cfg
 
 
@@ -76,12 +85,22 @@ def cli():
 
 
 @cli.command()
-def auth():
+@click.option("--mirror", default="auto",
+              type=click.Choice(["auto", "none", *[m.replace("https://", "") for m in KNOWN_MIRRORS]]))
+@click.option("--force", is_flag=True, help="Simpan token tanpa verifikasi")
+def auth(mirror, force):
     """🔑 Simpan access token."""
     token = click.prompt("  Paste x-access-token", hide_input=True)
-    cfg = StakeConfig(access_token=token)
+    cfg = StakeConfig(access_token=token, mirror_mode=True)
+    if mirror and mirror != "auto" and mirror != "none":
+        cfg.base_url = f"https://{mirror}"
 
-    # Verify token works
+    if force:
+        StakeConfigManager.save(cfg)
+        click.echo(f"{Fore.GREEN}  ✅ Token disimpan (tanpa verifikasi).{Fore.RESET}")
+        click.echo(f"     Jalankan: {Fore.YELLOW}python main.py balance{Fore.RESET}")
+        return
+
     click.echo(f"{Fore.YELLOW}  Verifikasi token...{Fore.RESET}")
 
     async def _verify():
@@ -94,10 +113,18 @@ def auth():
                     StakeConfigManager.save(cfg)
                     click.echo(f"{Fore.GREEN}  ✅ Token disimpan di {cfg.config_path}{Fore.RESET}")
                 else:
-                    click.echo(f"{Fore.RED}  ❌ Token invalid atau token expired.{Fore.RESET}")
-                    click.echo(f"     Ambil token baru dari DevTools terus ulangi auth.")
+                    click.echo(f"{Fore.RED}  ❌ Gagal:{Fore.RESET} token tidak dikenal")
+                    if click.confirm(f"  Tetap simpan token? (mungkin koneksi bermasalah)", default=True):
+                        StakeConfigManager.save(cfg)
+                        click.echo(f"{Fore.GREEN}  ✅ Token disimpan.{Fore.RESET}")
         except Exception as e:
-            click.echo(f"{Fore.RED}  ❌ Gagal: {e}{Fore.RESET}")
+            err_str = str(e)
+            click.echo(f"{Fore.RED}  ❌ Gagal verifikasi: {err_str[:80]}{Fore.RESET}")
+            click.echo(f"     Kemungkinan: token expired, domain diblokir, atau koneksi error.")
+            if click.confirm(f"  Tetap simpan token & coba lagi nanti?", default=True):
+                StakeConfigManager.save(cfg)
+                click.echo(f"{Fore.GREEN}  ✅ Token disimpan.{Fore.RESET}")
+                click.echo(f"     Jalankan: {Fore.YELLOW}python main.py balance{Fore.RESET} buat tes")
 
     asyncio.run(_verify())
 
@@ -107,7 +134,7 @@ def auth():
               type=click.Choice(["auto", "none", *[m.replace("https://", "") for m in KNOWN_MIRRORS]]))
 def balance(mirror):
     """💰 Tampilkan saldo."""
-    cfg = load_config_with_logging(None)
+    cfg = load_config_with_logging(None, mirror)
     if not cfg:
         return
     if mirror and mirror != "auto" and mirror != "none":
@@ -158,7 +185,7 @@ def balance(mirror):
               type=click.Choice(["auto", "none", *[m.replace("https://", "") for m in KNOWN_MIRRORS]]))
 def info(mirror):
     """ℹ️  Info akun (username, level, KYC)."""
-    cfg = load_config_with_logging(None)
+    cfg = load_config_with_logging(None, mirror)
     if not cfg:
         return
     if mirror and mirror != "auto" and mirror != "none":
@@ -384,7 +411,7 @@ async def _run_game(cfg, bet_config, lua_engine=None):
               type=click.Choice(["auto", "none", *[m.replace("https://", "") for m in KNOWN_MIRRORS]]))
 def run(mirror):
     """🎮 Mode interaktif (kayak Taraje) — pilih game, coin, script."""
-    cfg = load_config_with_logging(None)
+    cfg = load_config_with_logging(None, mirror)
     if not cfg:
         return
     if mirror and mirror != "auto" and mirror != "none":
@@ -408,7 +435,7 @@ def run(mirror):
               type=click.Choice(["auto", "none", *[m.replace("https://", "") for m in KNOWN_MIRRORS]]))
 def dice(coin, script, base_bet, chance, high, max_bets, target_profit, target_loss, mirror):
     """🎲 Main Dice dengan parameter opsional (kalo gak diisi, pake interaktif)."""
-    cfg = load_config_with_logging(None)
+    cfg = load_config_with_logging(None, mirror)
     if not cfg: return
     if mirror and mirror != "auto" and mirror != "none":
         cfg.base_url = f"https://{mirror}"
@@ -449,7 +476,7 @@ def dice(coin, script, base_bet, chance, high, max_bets, target_profit, target_l
               type=click.Choice(["auto", "none", *[m.replace("https://", "") for m in KNOWN_MIRRORS]]))
 def limbo(coin, script, base_bet, multiplier, max_bets, target_profit, target_loss, mirror):
     """🚀 Main Limbo dengan parameter opsional (interaktif kalo gak diisi)."""
-    cfg = load_config_with_logging(None)
+    cfg = load_config_with_logging(None, mirror)
     if not cfg: return
     if mirror and mirror != "auto" and mirror != "none":
         cfg.base_url = f"https://{mirror}"
