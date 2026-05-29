@@ -99,10 +99,23 @@ class LuaScriptEngine:
             return
         try:
             fn = self._lua.globals().get(name)
-            if fn is not None and callable(fn):
-                fn()
+            if fn is None:
+                # function not defined in script — fine, user may not have it
+                return
+            if not callable(fn):
+                print(f"⚠️  LUA [{name}]: is not a function (type={type(fn).__name__})")
+                return
+            fn()
         except Exception as e:
-            print(f"⚠️  LUA [{name}]: {e}")
+            import traceback
+            tb = traceback.format_exc()
+            # only show first meaningful frame
+            for line in tb.split('\n'):
+                if name in line or 'LuaRuntime' in line:
+                    print(f"⚠️  LUA [{name}]: {line.strip()}")
+                    break
+            else:
+                print(f"⚠️  LUA [{name}]: {e}")
 
     def get(self, key: str, default=None):
         """Get a LUA global variable."""

@@ -124,19 +124,16 @@ class LiveDisplay:
 
     def init(self):
         _cls()
-        icon = "🚀" if self.game == "limbo" else "🎲"
         gname = "LIMBO" if self.game == "limbo" else "DICE"
-        click.echo(f"{icon} {_c('yellow', gname)} {_c('dim', 'LIVE')} — {_c('green', self.name)} | {self.coin.upper()}")
-        click.echo(f"{_c('dim', '─'*50)}")
-        click.echo(f"{_c('dim', '#Bet    Amount          PnL            Balance        Total Wager')}")
+        click.echo(f"{_c('yellow', gname)} {_c('dim', 'LIVE')} — {_c('green', self.name)} | {self.coin.upper()}")
+        click.echo(f"{_c('dim', '─'*62)}")
         self._header = True
 
     def update(self, bet_id: int, won: bool, amount: float,
                pnl: float, balance: float, total_wagered: float):
-        flag = "✅" if won else "❌"
         pcol = "green" if pnl >= 0 else "red"
         pnl_s = f"{pnl:+.8f}" if pnl >= 0 else f"{pnl:.8f}"
-        line = (f"{flag} #{bet_id:<5} "
+        line = (f"#{bet_id:<4} "
                 f"{amount:.8f}  "
                 f"{_c(pcol, pnl_s)}  "
                 f"{balance:.8f}  "
