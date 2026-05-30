@@ -19,14 +19,18 @@ from .client import StakeClient, StakeError, AuthError
 @dataclass
 class BetConfig:
     """Configuration for a betting session."""
-    game: str = "dice"        # "dice" or "limbo"
+    game: str = "dice"        # "dice", "limbo", or "crash"
     coin: str = "usdt"        # lowercase
     base_bet: float = 0.0001
-    target: float = 49.5      # chance% (dice) or multiplier (limbo)
+    target: float = 49.5      # chance% (dice) or multiplier (limbo/crash)
     condition: str = "above"  # "above" or "below" (dice only)
     max_bets: int = 0         # 0 = unlimited
     stop_profit: float = 0.0  # 0 = no stop
     stop_loss: float = 0.0    # 0 = no stop
+    on_win_reset: bool = True  # reset to base bet after win (web mode)
+    on_win_pct: float = 0.0    # increase% on win (web mode)
+    on_lose_reset: bool = False
+    on_lose_pct: float = 100.0  # increase% on loss (martingale default)
     script_path: str = ""
     on_bet: Optional[Callable[["BetStats", dict], Awaitable[None]]] = None
     on_error: Optional[Callable[[str], Awaitable[None]]] = None
@@ -87,6 +91,8 @@ class BettingEngine:
         self.lua = lua_engine
         self.stats = BetStats()
         self._running = False
+        self._current_bet = config.base_bet
+        self._last_won = False
 
     async def run(self) -> BetStats:
         """Run the betting loop. Returns final stats when stopped."""
@@ -138,6 +144,7 @@ class BettingEngine:
                 result = await self._place_bet(amount, target, condition)
                 won = result.get("won", False)
                 payout = result.get("payout", 0)
+                self._last_won = won
 
                 self.stats.record(amount, payout, won)
 
@@ -188,7 +195,7 @@ class BettingEngine:
                 "nonce": roll.get("nonce"),
                 "id": roll.get("id"),
             }
-        else:  # limbo
+        elif self.cfg.game == "limbo":
             data = await self.client.bet_limbo(
                 amount, target, self.cfg.coin)
             bet = data.get("limboBet", {})
@@ -199,6 +206,20 @@ class BettingEngine:
                 "won": won,
                 "payout": float(bet.get("payout", 0)),
                 "crash_point": crash,
+                "nonce": bet.get("nonce"),
+                "id": bet.get("id"),
+            }
+        else:  # crash
+            data = await self.client.bet_crash(
+                amount, target, self.cfg.coin)
+            bet = data.get("crashBet", {})
+            state = bet.get("state", {})
+            crash_point = float(state.get("result", 0))
+            won = crash_point >= target
+            return {
+                "won": won,
+                "payout": float(bet.get("payout", 0)),
+                "crash_point": crash_point,
                 "nonce": bet.get("nonce"),
                 "id": bet.get("id"),
             }
@@ -237,7 +258,19 @@ class BettingEngine:
             target = self.lua.get("chance", target)
             return amount, target, condition
 
-        return self.cfg.base_bet, self.cfg.target, self.cfg.condition
+        # Web-based auto-bet mode
+        if self.stats.bets > 0:
+            if self._last_won:
+                if self.cfg.on_win_reset:
+                    self._current_bet = self.cfg.base_bet
+                else:
+                    self._current_bet *= (1 + self.cfg.on_win_pct / 100)
+            else:
+                if self.cfg.on_lose_reset:
+                    self._current_bet = self.cfg.base_bet
+                else:
+                    self._current_bet *= (1 + self.cfg.on_lose_pct / 100)
+        return self._current_bet, self.cfg.target, self.cfg.condition
 
     def _init_lua(self):
         """Initialize LUA engine with game variables."""

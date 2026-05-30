@@ -93,6 +93,36 @@ GQL_LIMBO_BET = """mutation LimboBet(
   }
 }"""
 
+# Crash bet — similar pattern to Limbo
+GQL_CRASH_BET = """mutation CrashBet(
+  $amount: Float!
+  $multiplierTarget: Float!
+  $currency: CurrencyEnum!
+  $identifier: String!
+) {
+  crashBet(
+    amount: $amount
+    multiplierTarget: $multiplierTarget
+    currency: $currency
+    identifier: $identifier
+  ) {
+    id
+    active
+    amount
+    payout
+    payoutMultiplier
+    currency
+    game
+    nonce
+    state {
+      ... on CasinoGameCrash {
+        result
+        multiplierTarget
+      }
+    }
+  }
+}"""
+
 # Rotate seed pair (Taraje calls this on every new seed)
 GQL_ROTATE_SEED = """mutation RotateSeedPair($seed: String!) {
   rotateSeedPair(seed: $seed) {
@@ -376,6 +406,26 @@ class StakeClient:
                 "identifier": str(uuid.uuid4()),
             },
             op_name="LimboBet",
+        )
+
+    async def bet_crash(self, amount: float, multiplier_target: float,
+                        currency: str) -> dict:
+        """Place a Crash bet.
+
+        Args:
+            amount: bet amount in currency units
+            multiplier_target: target multiplier (e.g. 2.0)
+            currency: lowercase coin code
+        """
+        return await self._query(
+            GQL_CRASH_BET,
+            variables={
+                "amount": amount,
+                "multiplierTarget": multiplier_target,
+                "currency": currency.lower(),
+                "identifier": str(uuid.uuid4()),
+            },
+            op_name="CrashBet",
         )
 
     async def rotate_seed(self, seed: str) -> dict:

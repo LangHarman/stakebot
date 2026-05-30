@@ -37,7 +37,7 @@ def _cls():
 
 def _banner():
     click.echo(f"\n{_c('bold')}  🎲 StakeBot v{VERSION}{_c('reset')}")
-    click.echo(f"{_c('dim')}  Dice / Limbo / LUA Scripts{_c('reset')}\n")
+    click.echo(f"{_c('dim')}  Dice / Limbo / Crash / LUA Scripts{_c('reset')}\n")
 
 def _pick(prompt: str, choices: list[str], default: int = 1) -> str:
     click.echo(_c("yellow", prompt))
@@ -114,7 +114,7 @@ def _splash():
 # ═════════════════════════════════════════════
 
 class LiveDisplay:
-    """Real-time betting display — compact 1-line updates."""
+    """Real-time betting display — compact 1-line updates with phase indicator."""
 
     def __init__(self, game: str, coin: str, name: str):
         self.game = game
@@ -125,14 +125,16 @@ class LiveDisplay:
 
     def init(self):
         _cls()
-        gname = "LIMBO" if self.game == "limbo" else "DICE"
+        gnames = {"limbo": "🚀 LIMBO", "dice": "🎲 DICE", "crash": "💥 CRASH"}
+        gname = gnames.get(self.game, self.game.upper())
         click.echo(f"{_c('yellow', gname)} {_c('dim', 'LIVE')} — {_c('green', self.name)} | {self.coin.upper()}")
-        click.echo(f"{_c('dim', '─'*62)}")
+        click.echo(f"{_c('dim', '#    Target Result Bet        PnL          Balance      Wager       W/L')}")
+        click.echo(f"{_c('dim', '─'*80)}")
         self._header = True
 
-    def update(self, bet_id: int, won: bool, amount: float,
-               pnl: float, balance: float, total_wagered: float,
-               phase: str = ""):
+    def update(self, bet_id: int, won: bool, amount: float, target: float = 0,
+               result: float = 0, pnl: float = 0, balance: float = 0,
+               total_wagered: float = 0, phase: int = 0):
         # Color logic for bet amount
         if not won:
             amt_col = "red"          # loss streak
@@ -144,13 +146,27 @@ class LiveDisplay:
 
         pcol = "green" if pnl >= 0 else "red"
         pnl_s = f"{pnl:+.8f}" if pnl >= 0 else f"{pnl:.8f}"
-        phase_tag = f" {_c('cyan', phase)}" if phase else ""
-        line = (f"#{bet_id:<4} "
+        won_s = _c("green", "W") if won else _c("red", "L")
+
+        # Phase indicator (W=Wager, R=Recovery, P=Paus, ·=none)
+        if phase == 1:
+            phase_s = _c("green", "W")     # Wager
+        elif phase == 2:
+            phase_s = _c("yellow", "R")    # Recovery
+        elif phase == 3:
+            phase_s = _c("magenta", "P")   # Paus
+        else:
+            phase_s = _c("dim", "·")
+
+        line = (f"{phase_s} "
+                f"#{bet_id:<5}"
+                f"{target:5.2f} "
+                f"{result:6.2f} "
                 f"{_c(amt_col, f'{amount:.8f}')}  "
                 f"{_c(pcol, pnl_s)}  "
                 f"{balance:.8f}  "
-                f"{total_wagered:.8f}"
-                f"{phase_tag}")
+                f"{total_wagered:.8f}  "
+                f"{won_s}")
         click.echo(line)
 
 
@@ -161,12 +177,12 @@ class LiveDisplay:
 def _summary(stats, bc: BetConfig, logger: SessionLogger, reason: str):
     _cls()
     pcol = "green" if stats.profit >= 0 else "red"
-    bar = f"{_c('cyan')}{'═'*44}{_c('reset')}"
+    gnames = {"limbo": "🚀 LIMBO", "dice": "🎲 DICE", "crash": "💥 CRASH"}
     lines = [
         f"{_c('cyan')}╔{'═'*44}╗{_c('reset')}",
         f"{_c('cyan')}║{_c('reset')}          {_c('yellow')}SESSION SUMMARY{_c('reset')}                  {_c('cyan')}║{_c('reset')}",
         f"{_c('cyan')}╠{'═'*44}╣{_c('reset')}",
-        f"{_c('cyan')}║{_c('reset')}  {_c('dim')}Game:{_c('reset')}  {'🚀 LIMBO' if bc.game == 'limbo' else '🎲 DICE'}" + " " * 29 + f"{_c('cyan')}║{_c('reset')}",
+        f"{_c('cyan')}║{_c('reset')}  {_c('dim')}Game:{_c('reset')}  {gnames.get(bc.game, bc.game)}" + " " * 29 + f"{_c('cyan')}║{_c('reset')}",
         f"{_c('cyan')}║{_c('reset')}  {_c('dim')}Coin:{_c('reset')}  {bc.coin.upper()}" + " " * 34 + f"{_c('cyan')}║{_c('reset')}",
         f"{_c('cyan')}║{_c('reset')}  {_c('dim')}Base Bet:{_c('reset')} {bc.base_bet:.8f}" + " " * 23 + f"{_c('cyan')}║{_c('reset')}",
         f"{_c('cyan')}╠{'═'*44}╣{_c('reset')}",
@@ -274,28 +290,6 @@ def balance():
 
 
 @cli.command()
-@click.argument("url", required=False)
-def proxy(url=None):
-    """Set proxy (SOCKS5/HTTP) — e.g. socks5://user:pass@ip:port"""
-    _cls(); _banner()
-    cfg = _load_cfg()
-    if url:
-        cfg.proxy = url
-        cfg.save()
-        click.echo(_c("green", f"\n✅ Proxy: {url}"))
-    elif cfg.proxy:
-        click.echo(f"{_c('yellow', '🔌 Proxy saat ini:')} {_c('green', cfg.proxy)}")
-        if click.confirm("\n❌ Hapus proxy?", default=False):
-            cfg.proxy = ""
-            cfg.save()
-            click.echo(_c("dim", "✅ Proxy dihapus"))
-    else:
-        click.echo(_c("dim", "\n❌ Belum ada proxy"))
-        click.echo(f"\n  Usage: {_c('white', 'python main.py proxy socks5://user:pass@ip:port')}")
-        click.echo(f"  Support: socks5:// | http:// | https://")
-
-
-@cli.command()
 def test():
     _cls(); _banner()
     cfg = _load_cfg()
@@ -362,8 +356,10 @@ def run():
     click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
     click.echo(f"{_c('cyan')}║{_c('reset')}      {_c('bold')}PILIH GAME{_c('reset')}              {_c('cyan')}║{_c('reset')}")
     click.echo(f"{_c('cyan')}╚{'═'*30}╝{_c('reset')}\n")
-    game = _pick("", ["🎲 Dice", "🚀 Limbo"], 1)
-    gt = "limbo" if "Limbo" in game else "dice"
+    game = _pick("", ["🎲 Dice", "🚀 Limbo", "💥 Crash"], 1)
+    if "Limbo" in game: gt = "limbo"
+    elif "Crash" in game: gt = "crash"
+    else: gt = "dice"
 
     # ── Coin ──
     _cls()
@@ -390,25 +386,51 @@ def run():
         target = click.prompt("  🎯 Chance (%)", type=float, default=49.5)
         cond = _pick("  📈 Roll:", ["Above", "Below"], 1)
         condition = cond.lower()
+    elif gt == "crash":
+        target = click.prompt("  🎯 Multiplier (x)", type=float, default=2.0)
+        condition = "above"
     else:
         target = click.prompt("  🎯 Multiplier (x)", type=float, default=2.0)
         condition = "above"
 
-    # ── Script ──
+    # ── Strategi ──
     _cls()
     click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
     click.echo(f"{_c('cyan')}║{_c('reset')}     {_c('bold')}STRATEGI{_c('reset')}               {_c('cyan')}║{_c('reset')}")
     click.echo(f"{_c('cyan')}╚{'═'*30}╝{_c('reset')}\n")
     lua_engine = None; script_name = "manual"
-    if click.confirm("📜 LUA script?", default=True):
+    bets_type = _pick("", ["📜 Script Lua", "🌐 Web Based (auto-bet)"], 1)
+    owr = True; owp = 0.0; olr = False; olp = 100.0
+    if "Lua" in bets_type:
         scripts = sorted(SCRIPT_DIR.glob("*.lua"))
         if scripts:
             snames = [s.stem.replace("_"," ").title() for s in scripts]
-            chosen = _pick("", snames, 1)
+            chosen = _pick("  Script", snames, 1)
             idx = snames.index(chosen); script_name = scripts[idx].stem
             try: lua_engine = LuaScriptEngine(scripts[idx].read_text())
             except Exception as e:
                 click.echo(_c("red", f"\n❌ LUA: {e}")); return
+        else:
+            click.echo(_c("red", "\n❌ Tidak ada script .lua")); return
+    else:
+        # Web Based auto-bet mode — on win/lose settings
+        click.echo()
+        _cls()
+        click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
+        click.echo(f"{_c('cyan')}║{_c('reset')}     {_c('bold')}ON WIN{_c('reset')}                 {_c('cyan')}║{_c('reset')}")
+        click.echo(f"{_c('cyan')}╚{'═'*30}╝{_c('reset')}\n")
+        win_act = _pick("", ["Reset to base bet", "Increase by %"], 1)
+        owr = win_act == "Reset to base bet"
+        if not owr:
+            owp = click.prompt("  Increase by %", type=float, default=100.0)
+        _cls()
+        click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
+        click.echo(f"{_c('cyan')}║{_c('reset')}     {_c('bold')}ON LOSE{_c('reset')}                {_c('cyan')}║{_c('reset')}")
+        click.echo(f"{_c('cyan')}╚{'═'*30}╝{_c('reset')}\n")
+        lose_act = _pick("", ["Increase by % (martingale)", "Reset to base bet"], 1)
+        olr = lose_act == "Reset to base bet"
+        if not olr:
+            olp = click.prompt("  Increase by %", type=float, default=100.0)
 
     # ── Stop ──
     _cls()
@@ -423,37 +445,50 @@ def run():
 
     # ── Confirm ──
     _cls()
+    gnames = {"limbo": "🚀 LIMBO", "dice": "🎲 DICE", "crash": "💥 CRASH"}
+    is_lua = lua_engine is not None
     click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
     click.echo(f"{_c('cyan')}║{_c('reset')}     {_c('yellow')}RINGKASAN{_c('reset')}              {_c('cyan')}║{_c('reset')}")
     click.echo(f"{_c('cyan')}╠{'═'*30}╣{_c('reset')}")
-    click.echo(f"{_c('cyan')}║{_c('reset')}  {'🎲 DICE' if gt=='dice' else '🚀 LIMBO'}" + " " * 23 + f"{_c('cyan')}║{_c('reset')}")
+    click.echo(f"{_c('cyan')}║{_c('reset')}  {gnames.get(gt, gt)}" + " " * 23 + f"{_c('cyan')}║{_c('reset')}")
     click.echo(f"{_c('cyan')}║{_c('reset')}  {coin.upper()}" + " " * 30 + f"{_c('cyan')}║{_c('reset')}")
     click.echo(f"{_c('cyan')}║{_c('reset')}  Bet: {bb:.8f}" + " " * 23 + f"{_c('cyan')}║{_c('reset')}")
     if gt == "dice":
         click.echo(f"{_c('cyan')}║{_c('reset')}  Target: {target}% {condition}" + " " * 16 + f"{_c('cyan')}║{_c('reset')}")
     else:
         click.echo(f"{_c('cyan')}║{_c('reset')}  Target: {target}x" + " " * 22 + f"{_c('cyan')}║{_c('reset')}")
-    click.echo(f"{_c('cyan')}║{_c('reset')}  Script: {script_name}" + " " * 22 + f"{_c('cyan')}║{_c('reset')}")
+    if is_lua:
+        click.echo(f"{_c('cyan')}║{_c('reset')}  Script: {script_name}" + " " * 22 + f"{_c('cyan')}║{_c('reset')}")
+    else:
+        ow = "Reset" if owr else f"+{owp:.0f}%"
+        ol = "Reset" if olr else f"+{olp:.0f}%"
+        click.echo(f"{_c('cyan')}║{_c('reset')}  On Win: {ow} / Lose: {ol}" + " " * 11 + f"{_c('cyan')}║{_c('reset')}")
+    if mx: click.echo(f"{_c('cyan')}║{_c('reset')}  Max bets: {mx}" + " " * 23 + f"{_c('cyan')}║{_c('reset')}")
+    if sp: click.echo(f"{_c('cyan')}║{_c('reset')}  Stop profit: {sp}" + " " * 20 + f"{_c('cyan')}║{_c('reset')}")
+    if sl: click.echo(f"{_c('cyan')}║{_c('reset')}  Stop loss: {sl}" + " " * 22 + f"{_c('cyan')}║{_c('reset')}")
     click.echo(f"{_c('cyan')}╚{'═'*30}╝{_c('reset')}\n")
+    loop_enabled = click.confirm("  🔄 Looping?", default=False)
     if not click.confirm(f"  {_c('yellow', '🔥 RUN?')}", default=True):
         return
 
     bc = BetConfig(game=gt, coin=coin.lower(), base_bet=bb,
                    target=target, condition=condition,
-                   max_bets=mx, stop_profit=sp, stop_loss=sl)
+                   max_bets=mx, stop_profit=sp, stop_loss=sl,
+                   on_win_reset=owr, on_win_pct=owp,
+                   on_lose_reset=olr, on_lose_pct=olp)
     logger = SessionLogger(gt, coin.lower(), bb, script_name)
-    asyncio.run(_run_live(cfg, bc, lua_engine, name, logger))
+    asyncio.run(_run_live(cfg, bc, lua_engine, name, logger, loop_enabled))
 
 
 async def _run_live(cfg: StakeConfig, bc: BetConfig, lua,
-                    name: str, logger: SessionLogger):
+                    name: str, logger: SessionLogger, loop_enabled: bool = False):
     async with StakeClient(cfg) as client:
         try: user = await client.get_user()
         except AuthError: _cls(); click.echo(_c("red","\n❌ Token expired!")); return
         except ConnectionError: _cls(); click.echo(_c("red","\n❌ Gagal koneksi!")); return
 
         bal = client.balance.get(bc.coin, 0)
-        if bal < bc.base_bet:
+        if bal < bc.base_bet and not lua:
             _cls()
             click.echo(_c("red", f"\n❌ Saldo {bc.coin.upper()} tidak cukup!"))
             return
@@ -461,48 +496,72 @@ async def _run_live(cfg: StakeConfig, bc: BetConfig, lua,
         display = LiveDisplay(bc.game, bc.coin, name)
         display.init()
 
+        loop_count = 0
         cbet = [bc.base_bet]
+        ctarget = [bc.target]
+        last_target = [bc.target]
 
-        async def on_bet(stats, result):
-            won = result.get("won", False)
-            payout = result.get("payout", 0)
-            amount = cbet[0]
-            # Always track manually — client.balance is stale between bets
-            stats.current_balance += (payout - amount) if won else -amount
+        while True:
+            loop_count += 1
+            cbet[0] = bc.base_bet
+            ctarget[0] = bc.target
 
-            # Get current phase tag from LUA
-            phase_num = lua.get("phase", 1) if lua else 1
-            phase_names = {1: "WAGER", 2: "RECOVER", 3: "PAUS"}
-            phase_tag = phase_names.get(phase_num, "")
+            async def on_bet(stats, result):
+                won = result.get("won", False)
+                payout = result.get("payout", 0)
+                amount = cbet[0]
+                target = ctarget[0]
+                roll = result.get("result", result.get("crash_point", 0))
+                # Always track manually — client.balance is stale between bets
+                stats.current_balance += (payout - amount) if won else -amount
 
-            display.update(bet_id=stats.bets, won=won, amount=amount,
-                          pnl=stats.profit, balance=stats.current_balance,
-                          total_wagered=stats.total_wagered,
-                          phase=phase_tag)
+                # Phase indicator (Lua script only)
+                cur_phase = lua.get("phase") if lua else 0
 
-            logger.record(bet_id=stats.bets, amount=amount, target=bc.target,
-                         condition=bc.condition, won=won, payout=payout,
-                         profit=stats.profit, streak=stats.streak,
-                         balance=stats.current_balance, result_raw=result)
+                # Phase change separator (target shift >= 0.2 = new phase)
+                if abs(target - last_target[0]) >= 0.2:
+                    click.echo()
+                last_target[0] = target
 
-        engine = BettingEngine(client=client, config=bc, lua_engine=lua)
-        orig = engine._place_bet
-        async def _tp(amount, target, condition):
-            cbet[0] = amount; return await orig(amount, target, condition)
-        engine._place_bet = _tp
-        bc.on_bet = on_bet
+                display.update(bet_id=stats.bets, won=won, amount=amount,
+                              target=target, result=roll,
+                              pnl=stats.profit, balance=stats.current_balance,
+                              total_wagered=stats.total_wagered, phase=cur_phase)
 
-        reason = ""
-        try: stats = await engine.run()
-        except KeyboardInterrupt: engine.stop(); await asyncio.sleep(0.3); stats = engine.stats; reason = "User interrupted"
+                logger.record(bet_id=stats.bets, amount=amount, target=bc.target,
+                             condition=bc.condition, won=won, payout=payout,
+                             profit=stats.profit, streak=stats.streak,
+                             balance=stats.current_balance, result_raw=result)
 
-        if not reason:
-            if bc.max_bets > 0 and stats.bets >= bc.max_bets: reason = "Max bets reached"
-            elif bc.stop_profit > 0 and stats.profit >= bc.stop_profit: reason = "Target profit reached"
-            elif bc.stop_loss > 0 and stats.profit <= -bc.stop_loss: reason = "Stop loss triggered"
+            engine = BettingEngine(client=client, config=bc, lua_engine=lua)
+            orig = engine._place_bet
+            async def _tp(amount, target, condition):
+                cbet[0] = amount; ctarget[0] = target; return await orig(amount, target, condition)
+            engine._place_bet = _tp
+            bc.on_bet = on_bet
 
-        logger.save()
-        _summary(stats, bc, logger, reason)
+            reason = ""
+            try: stats = await engine.run()
+            except KeyboardInterrupt: engine.stop(); await asyncio.sleep(0.3); stats = engine.stats; reason = "User interrupted"
+
+            if not reason:
+                if bc.max_bets > 0 and stats.bets >= bc.max_bets: reason = "Max bets reached"
+                elif bc.stop_profit > 0 and stats.profit >= bc.stop_profit: reason = "Target profit reached"
+                elif bc.stop_loss > 0 and stats.profit <= -bc.stop_loss: reason = "Stop loss triggered"
+
+            logger.save()
+            _summary(stats, bc, logger, reason)
+
+            if not loop_enabled:
+                break
+
+            # Re-init for next loop
+            click.echo(f"\n{_c('dim', '─'*70)}")
+            click.echo(f"{_c('yellow', f'🔄 LOOP #{loop_count+1}')} {_c('dim', '— restarting from base bet...')}")
+            logger = SessionLogger(bc.game, bc.coin, bc.base_bet, logger.script_name)
+            if lua:
+                lua.set("balance", stats.current_balance)
+                lua.call("init")
 
 
 def main():
