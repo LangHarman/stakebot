@@ -369,39 +369,19 @@ def run():
     coin = _pick("", ["USDT","LTC","BTC","ETH","SOL","DOGE","TRX","BNB","Lainnya"],1)
     if coin == "Lainnya": coin = click.prompt("  Kode", default="DOT").upper()
 
-    # ── Base Bet ──
+    # ── Strategi (tanya dulu: LUA atau Web) ──
     _cls()
     click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
-    click.echo(f"{_c('cyan')}║{_c('reset')}    {_c('bold')}BASE BET ({coin}){_c('reset')}          {_c('cyan')}║{_c('reset')}")
+    click.echo(f"{_c('cyan')}║{_c('reset')}     {_c('bold')}BET SET{_c('reset')}                {_c('cyan')}║{_c('reset')}")
     click.echo(f"{_c('cyan')}╚{'═'*30}╝{_c('reset')}\n")
+    lua_engine = None; script_name = "web"
+    bets_type = _pick("", ["🌐 Web Based (auto-bet)", "📜 Script Lua"], 1)
     defs = {"BTC":1e-8,"ETH":1e-5,"USDT":0.01,"LTC":0.001,"SOL":0.001,"DOGE":1.0,"TRX":1.0}
-    bb = click.prompt("  💰 Amount", type=float, default=defs.get(coin, 0.01))
-
-    # ── Target ──
-    _cls()
-    click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
-    click.echo(f"{_c('cyan')}║{_c('reset')}      {_c('bold')}TARGET{_c('reset')}                {_c('cyan')}║{_c('reset')}")
-    click.echo(f"{_c('cyan')}╚{'═'*30}╝{_c('reset')}\n")
-    if gt == "dice":
-        target = click.prompt("  🎯 Chance (%)", type=float, default=49.5)
-        cond = _pick("  📈 Roll:", ["Above", "Below"], 1)
-        condition = cond.lower()
-    elif gt == "crash":
-        target = click.prompt("  🎯 Multiplier (x)", type=float, default=2.0)
-        condition = "above"
-    else:
-        target = click.prompt("  🎯 Multiplier (x)", type=float, default=2.0)
-        condition = "above"
-
-    # ── Strategi ──
-    _cls()
-    click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
-    click.echo(f"{_c('cyan')}║{_c('reset')}     {_c('bold')}STRATEGI{_c('reset')}               {_c('cyan')}║{_c('reset')}")
-    click.echo(f"{_c('cyan')}╚{'═'*30}╝{_c('reset')}\n")
-    lua_engine = None; script_name = "manual"
-    bets_type = _pick("", ["📜 Script Lua", "🌐 Web Based (auto-bet)"], 1)
+    target = 2.0; condition = "above"
     owr = True; owp = 0.0; olr = False; olp = 100.0
+
     if "Lua" in bets_type:
+        # ── LUA Script ──
         scripts = sorted(SCRIPT_DIR.glob("*.lua"))
         if scripts:
             snames = [s.stem.replace("_"," ").title() for s in scripts]
@@ -412,9 +392,30 @@ def run():
                 click.echo(_c("red", f"\n❌ LUA: {e}")); return
         else:
             click.echo(_c("red", "\n❌ Tidak ada script .lua")); return
+        bb = 0.0  # Lua script controls bet amount
+
     else:
-        # Web Based auto-bet mode — on win/lose settings
-        click.echo()
+        # ── Web Based: Base Bet ──
+        _cls()
+        click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
+        click.echo(f"{_c('cyan')}║{_c('reset')}    {_c('bold')}BET AMOUNT ({coin}){_c('reset')}         {_c('cyan')}║{_c('reset')}")
+        click.echo(f"{_c('cyan')}╚{'═'*30}╝{_c('reset')}\n")
+        bb = click.prompt("  💰 Amount", type=float, default=defs.get(coin, 0.01))
+
+        # ── Web Based: Target ──
+        _cls()
+        click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
+        click.echo(f"{_c('cyan')}║{_c('reset')}      {_c('bold')}TARGET{_c('reset')}                {_c('cyan')}║{_c('reset')}")
+        click.echo(f"{_c('cyan')}╚{'═'*30}╝{_c('reset')}\n")
+        if gt == "dice":
+            target = click.prompt("  🎯 Chance (%)", type=float, default=49.5)
+            cond = _pick("  📈 Roll:", ["Above", "Below"], 1)
+            condition = cond.lower()
+        else:
+            target = click.prompt("  🎯 Multiplier (x)", type=float, default=2.0)
+            condition = "above"
+
+        # ── Web Based: On Win ──
         _cls()
         click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
         click.echo(f"{_c('cyan')}║{_c('reset')}     {_c('bold')}ON WIN{_c('reset')}                 {_c('cyan')}║{_c('reset')}")
@@ -423,6 +424,8 @@ def run():
         owr = win_act == "Reset to base bet"
         if not owr:
             owp = click.prompt("  Increase by %", type=float, default=100.0)
+
+        # ── Web Based: On Lose ──
         _cls()
         click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
         click.echo(f"{_c('cyan')}║{_c('reset')}     {_c('bold')}ON LOSE{_c('reset')}                {_c('cyan')}║{_c('reset')}")
@@ -452,14 +455,14 @@ def run():
     click.echo(f"{_c('cyan')}╠{'═'*30}╣{_c('reset')}")
     click.echo(f"{_c('cyan')}║{_c('reset')}  {gnames.get(gt, gt)}" + " " * 23 + f"{_c('cyan')}║{_c('reset')}")
     click.echo(f"{_c('cyan')}║{_c('reset')}  {coin.upper()}" + " " * 30 + f"{_c('cyan')}║{_c('reset')}")
-    click.echo(f"{_c('cyan')}║{_c('reset')}  Bet: {bb:.8f}" + " " * 23 + f"{_c('cyan')}║{_c('reset')}")
-    if gt == "dice":
-        click.echo(f"{_c('cyan')}║{_c('reset')}  Target: {target}% {condition}" + " " * 16 + f"{_c('cyan')}║{_c('reset')}")
-    else:
-        click.echo(f"{_c('cyan')}║{_c('reset')}  Target: {target}x" + " " * 22 + f"{_c('cyan')}║{_c('reset')}")
     if is_lua:
         click.echo(f"{_c('cyan')}║{_c('reset')}  Script: {script_name}" + " " * 22 + f"{_c('cyan')}║{_c('reset')}")
     else:
+        click.echo(f"{_c('cyan')}║{_c('reset')}  Bet: {bb:.8f}" + " " * 23 + f"{_c('cyan')}║{_c('reset')}")
+        if gt == "dice":
+            click.echo(f"{_c('cyan')}║{_c('reset')}  Target: {target}% {condition}" + " " * 16 + f"{_c('cyan')}║{_c('reset')}")
+        else:
+            click.echo(f"{_c('cyan')}║{_c('reset')}  Target: {target}x" + " " * 22 + f"{_c('cyan')}║{_c('reset')}")
         ow = "Reset" if owr else f"+{owp:.0f}%"
         ol = "Reset" if olr else f"+{olp:.0f}%"
         click.echo(f"{_c('cyan')}║{_c('reset')}  On Win: {ow} / Lose: {ol}" + " " * 11 + f"{_c('cyan')}║{_c('reset')}")
