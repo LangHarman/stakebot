@@ -91,8 +91,6 @@ class BettingEngine:
         self.lua = lua_engine
         self.stats = BetStats()
         self._running = False
-        self._current_bet = config.base_bet
-        self._last_won = False
 
     async def run(self, initial_balance: float | None = None) -> BetStats:
         """Run the betting loop. Returns final stats when stopped.
@@ -154,7 +152,6 @@ class BettingEngine:
                     result = await self._place_bet(amount, target, condition)
                     won = result.get("won", False)
                     payout = result.get("payout", 0)
-                    self._last_won = won
 
                     self.stats.record(amount, payout, won)
 
@@ -261,33 +258,19 @@ class BettingEngine:
         Returns (None, *, *) to stop.
         """
         if self.lua:
-            nextbet = self.lua.get("nextbet", self.cfg.base_bet)
+            # Run user's dobet() first (original StakeBot behavior)
+            self.lua.call("dobet")
+            if self.lua.stopped:
+                target = self.lua.get("chance", self.cfg.target)
+                return None, target, "above"
+            amount = self.lua.get("nextbet", self.cfg.base_bet)
             target = self.lua.get("chance", self.cfg.target)
             bethigh = self.lua.get("bethigh", True)
             condition = "above" if bethigh else "below"
-            # Run user's dobet()
-            self.lua.call("dobet")
-            # Check if stop() was called
-            if self.lua.stopped:
-                return None, target, condition
-            # re-read after dobet() may have changed them
-            amount = self.lua.get("nextbet", self.cfg.base_bet)
-            target = self.lua.get("chance", target)
             return amount, target, condition
 
-        # Web-based auto-bet mode
-        if self.stats.bets > 0:
-            if self._last_won:
-                if self.cfg.on_win_reset:
-                    self._current_bet = self.cfg.base_bet
-                else:
-                    self._current_bet *= (1 + self.cfg.on_win_pct / 100)
-            else:
-                if self.cfg.on_lose_reset:
-                    self._current_bet = self.cfg.base_bet
-                else:
-                    self._current_bet *= (1 + self.cfg.on_lose_pct / 100)
-        return self._current_bet, self.cfg.target, self.cfg.condition
+        # Web-based: simple fixed bet (on_win/on_lose handled in main.py display)
+        return self.cfg.base_bet, self.cfg.target, self.cfg.condition
 
     def _init_lua(self):
         """Initialize LUA engine with game variables."""

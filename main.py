@@ -435,6 +435,14 @@ def run():
         if not olr:
             olp = click.prompt("  Increase by %", type=float, default=100.0)
 
+    # ── Check LUA availability ──
+    if lua_engine and lua_engine._lua is None:
+        _cls()
+        click.echo(_c("red", "\n❌ lupa library tidak terinstall!"))
+        click.echo(_c("dim", "   pip install lupa"))
+        click.echo(_c("dim", "   (atau pilih 🌐 Web Based mode)"))
+        return
+
     # ── Stop ──
     _cls()
     click.echo(f"\n{_c('cyan')}╔{'═'*30}╗{_c('reset')}")
