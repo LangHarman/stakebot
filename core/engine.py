@@ -144,36 +144,44 @@ class BettingEngine:
             if amount > self.stats.current_balance:
                 if self.cfg.on_error:
                     await self.cfg.on_error(
-                        f"Bet {amount} > balance {self.stats.current_balance}"
+                        f"Bet {amount:.8f} > balance {self.stats.current_balance:.8f}"
                     )
                 break
 
-            # Place bet
-            try:
-                result = await self._place_bet(amount, target, condition)
-                won = result.get("won", False)
-                payout = result.get("payout", 0)
-                self._last_won = won
+            # Place bet (retry on transient errors, max 3 attempts)
+            for attempt in range(3):
+                try:
+                    result = await self._place_bet(amount, target, condition)
+                    won = result.get("won", False)
+                    payout = result.get("payout", 0)
+                    self._last_won = won
 
-                self.stats.record(amount, payout, won)
+                    self.stats.record(amount, payout, won)
 
-                # Update LUA state
-                if self.lua:
-                    self._update_lua(won, amount, payout, result)
+                    # Update LUA state
+                    if self.lua:
+                        self._update_lua(won, amount, payout, result)
 
-                # Callback
-                if self.cfg.on_bet:
-                    await self.cfg.on_bet(self.stats, result)
+                    # Callback
+                    if self.cfg.on_bet:
+                        await self.cfg.on_bet(self.stats, result)
 
-            except AuthError as e:
-                if self.cfg.on_error:
-                    await self.cfg.on_error(f"Auth error: {e}")
+                    break  # success, exit retry loop
+
+                except AuthError as e:
+                    if self.cfg.on_error:
+                        await self.cfg.on_error(f"Auth: {e}")
+                    self._running = False
+                    break  # break retry loop; outer loop also stops (self._running=False)
+                except Exception as e:
+                    if self.cfg.on_error:
+                        await self.cfg.on_error(f"Bet error (attempt {attempt+1}/3): {e}")
+                    if attempt < 2:
+                        await asyncio.sleep(1)
+            else:
+                # All retries failed — stop engine
+                self._running = False
                 break
-            except Exception as e:
-                if self.cfg.on_error:
-                    await self.cfg.on_error(str(e))
-                await asyncio.sleep(1)  # throttle on errors
-                continue
 
         self._running = False
         return self.stats

@@ -496,11 +496,24 @@ async def _run_live(cfg: StakeConfig, bc: BetConfig, lua,
             click.echo(_c("red", f"\n❌ Saldo {bc.coin.upper()} tidak cukup!"))
             return
 
+        # Show starting balance
+        click.echo(_c("dim", f"  💰 Balance: {bal:.8f} {bc.coin.upper()}"))
+        if bal <= 0 and not lua:
+            _cls()
+            click.echo(_c("red", f"\n❌ Saldo {bc.coin.upper()} = 0, tidak bisa bet!"))
+            return
+
         display = LiveDisplay(bc.game, bc.coin, name)
         display.init()
 
         loop_count = 0
+        error_count = [0]
         current_balance = bal
+
+        async def _on_error(msg: str):
+            error_count[0] += 1
+            if error_count[0] <= 3:
+                click.echo(_c("red", f"  ⚠️  {msg}"))
         cbet = [bc.base_bet]
         ctarget = [bc.target]
         last_target = [bc.target]
@@ -543,8 +556,10 @@ async def _run_live(cfg: StakeConfig, bc: BetConfig, lua,
                 cbet[0] = amount; ctarget[0] = target; return await orig(amount, target, condition)
             engine._place_bet = _tp
             bc.on_bet = on_bet
+            bc.on_error = _on_error
 
             reason = ""
+            error_count[0] = 0
             try:
                 stats = await engine.run(initial_balance=current_balance)
             except KeyboardInterrupt:
