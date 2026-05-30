@@ -471,7 +471,7 @@ async def _run_live(cfg: StakeConfig, bc: BetConfig, lua,
             stats.current_balance += (payout - amount) if won else -amount
 
             # Get current phase tag from LUA
-            phase_num = lua_engine.get("phase", 1) if lua_engine else 1
+            phase_num = lua.get("phase", 1) if lua else 1
             phase_names = {1: "WAGER", 2: "RECOVER", 3: "PAUS"}
             phase_tag = phase_names.get(phase_num, "")
 
