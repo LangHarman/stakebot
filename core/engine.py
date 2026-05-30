@@ -13,7 +13,7 @@ import string
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Awaitable
 
-from .client import StakeClient, StakeError, AuthError
+from .client import StakeClient, StakeError, AuthError, ConnectionError
 
 
 @dataclass
@@ -94,20 +94,29 @@ class BettingEngine:
         self._current_bet = config.base_bet
         self._last_won = False
 
-    async def run(self) -> BetStats:
-        """Run the betting loop. Returns final stats when stopped."""
+    async def run(self, initial_balance: float | None = None) -> BetStats:
+        """Run the betting loop. Returns final stats when stopped.
+
+        Args:
+            initial_balance: skip get_user() if provided (for loop mode).
+        """
         self._running = True
 
         # Init balance
-        try:
-            user = await self.client.get_user()
-            self.stats.current_balance = self.client.balance.get(
-                self.cfg.coin, 0)
-            self.stats.start_balance = self.stats.current_balance
-        except AuthError:
-            raise
-        except Exception:
-            pass
+        if initial_balance is not None:
+            self.stats.current_balance = initial_balance
+            self.stats.start_balance = initial_balance
+        else:
+            try:
+                user = await self.client.get_user()
+                self.stats.current_balance = self.client.balance.get(
+                    self.cfg.coin, 0)
+                self.stats.start_balance = self.stats.current_balance
+            except AuthError:
+                raise
+            except Exception:
+                # Don't silently use 0 — raise so caller can handle
+                raise ConnectionError("Gagal fetch balance — cek koneksi")
 
         # Init LUA
         if self.lua:

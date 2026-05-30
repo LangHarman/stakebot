@@ -500,6 +500,7 @@ async def _run_live(cfg: StakeConfig, bc: BetConfig, lua,
         display.init()
 
         loop_count = 0
+        current_balance = bal
         cbet = [bc.base_bet]
         ctarget = [bc.target]
         last_target = [bc.target]
@@ -544,8 +545,17 @@ async def _run_live(cfg: StakeConfig, bc: BetConfig, lua,
             bc.on_bet = on_bet
 
             reason = ""
-            try: stats = await engine.run()
-            except KeyboardInterrupt: engine.stop(); await asyncio.sleep(0.3); stats = engine.stats; reason = "User interrupted"
+            try:
+                stats = await engine.run(initial_balance=current_balance)
+            except KeyboardInterrupt:
+                engine.stop(); await asyncio.sleep(0.3); stats = engine.stats; reason = "User interrupted"
+            except ConnectionError as e:
+                click.echo(_c("red", f"\n❌ {e}"))
+                stats = engine.stats; reason = str(e)
+
+            # Update running balance for next loop
+            if stats.current_balance > 0:
+                current_balance = stats.current_balance
 
             if not reason:
                 if bc.max_bets > 0 and stats.bets >= bc.max_bets: reason = "Max bets reached"
@@ -554,6 +564,11 @@ async def _run_live(cfg: StakeConfig, bc: BetConfig, lua,
 
             logger.save()
             _summary(stats, bc, logger, reason)
+
+            # If no bets placed, don't loop — something is wrong
+            if stats.bets == 0 and loop_enabled:
+                click.echo(_c("red", "\n❌ 0 bets placed — stopping loop"))
+                break
 
             if not loop_enabled:
                 break
