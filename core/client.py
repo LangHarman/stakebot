@@ -240,7 +240,10 @@ class StakeClient:
     def session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             connector = aiohttp.TCPConnector(limit=5, force_close=False)
-            self._session = aiohttp.ClientSession(connector=connector)
+            kwargs = {"connector": connector}
+            if self.cfg.proxy:
+                kwargs["proxy"] = self.cfg.proxy
+            self._session = aiohttp.ClientSession(**kwargs)
         return self._session
 
     def _headers(self) -> dict:

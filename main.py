@@ -271,6 +271,28 @@ def balance():
 
 
 @cli.command()
+@click.argument("url", required=False)
+def proxy(url=None):
+    """Set proxy (SOCKS5/HTTP) — e.g. socks5://user:pass@ip:port"""
+    _cls(); _banner()
+    cfg = _load_cfg()
+    if url:
+        cfg.proxy = url
+        cfg.save()
+        click.echo(_c("green", f"\n✅ Proxy: {url}"))
+    elif cfg.proxy:
+        click.echo(f"{_c('yellow', '🔌 Proxy saat ini:')} {_c('green', cfg.proxy)}")
+        if click.confirm("\n❌ Hapus proxy?", default=False):
+            cfg.proxy = ""
+            cfg.save()
+            click.echo(_c("dim", "✅ Proxy dihapus"))
+    else:
+        click.echo(_c("dim", "\n❌ Belum ada proxy"))
+        click.echo(f"\n  Usage: {_c('white', 'python main.py proxy socks5://user:pass@ip:port')}")
+        click.echo(f"  Support: socks5:// | http:// | https://")
+
+
+@cli.command()
 def test():
     _cls(); _banner()
     cfg = _load_cfg()
