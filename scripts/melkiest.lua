@@ -12,6 +12,16 @@ function switch_phase(new_phase)
     phase_start_profit = profit
     phase_pnl = 0
     phase_bets = 0
+    if new_phase == 1 then
+        nextbet = 0.00001
+        chance = 1.01
+    elseif new_phase == 2 then
+        nextbet = 0.00001
+        chance = 1.23 + math.random() * 0.22
+    elseif new_phase == 3 then
+        nextbet = 0.000005
+        chance = 24 + math.random() * 11
+    end
 end
 
 function random_paus()

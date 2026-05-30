@@ -131,7 +131,8 @@ class LiveDisplay:
         self._header = True
 
     def update(self, bet_id: int, won: bool, amount: float,
-               pnl: float, balance: float, total_wagered: float):
+               pnl: float, balance: float, total_wagered: float,
+               phase: str = ""):
         # Color logic for bet amount
         if not won:
             amt_col = "red"          # loss streak
@@ -143,11 +144,13 @@ class LiveDisplay:
 
         pcol = "green" if pnl >= 0 else "red"
         pnl_s = f"{pnl:+.8f}" if pnl >= 0 else f"{pnl:.8f}"
+        phase_tag = f" {_c('cyan', phase)}" if phase else ""
         line = (f"#{bet_id:<4} "
                 f"{_c(amt_col, f'{amount:.8f}')}  "
                 f"{_c(pcol, pnl_s)}  "
                 f"{balance:.8f}  "
-                f"{total_wagered:.8f}")
+                f"{total_wagered:.8f}"
+                f"{phase_tag}")
         click.echo(line)
 
 
@@ -467,9 +470,15 @@ async def _run_live(cfg: StakeConfig, bc: BetConfig, lua,
             # Always track manually — client.balance is stale between bets
             stats.current_balance += (payout - amount) if won else -amount
 
+            # Get current phase tag from LUA
+            phase_num = lua_engine.get("phase", 1) if lua_engine else 1
+            phase_names = {1: "WAGER", 2: "RECOVER", 3: "PAUS"}
+            phase_tag = phase_names.get(phase_num, "")
+
             display.update(bet_id=stats.bets, won=won, amount=amount,
                           pnl=stats.profit, balance=stats.current_balance,
-                          total_wagered=stats.total_wagered)
+                          total_wagered=stats.total_wagered,
+                          phase=phase_tag)
 
             logger.record(bet_id=stats.bets, amount=amount, target=bc.target,
                          condition=bc.condition, won=won, payout=payout,
